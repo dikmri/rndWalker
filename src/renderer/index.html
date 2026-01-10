@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' file:">
+  <title>Random Video Player</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="player-container">
+    <video id="video-player" autoplay></video>
+    <audio id="audio-player" autoplay loop></audio>
+
+    <div id="overlay">
+      <div id="volume-indicator" class="indicator hidden">
+        <span id="volume-icon">🔊</span>
+        <span id="volume-value">100%</span>
+      </div>
+      <div id="mute-indicator" class="indicator hidden">
+        <span>🔇 Muted</span>
+      </div>
+    </div>
+
+    <button id="settings-btn" title="Settings">⚙</button>
+  </div>
+
+  <div id="settings-modal" class="modal hidden">
+    <div class="modal-content">
+      <h2>Settings</h2>
+
+      <div class="setting-group">
+        <label for="mp4-folder">MP4 Folder:</label>
+        <div class="folder-input">
+          <input type="text" id="mp4-folder" readonly>
+          <button id="select-mp4-btn">Browse</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label for="mp3-folder">MP3 Folder:</label>
+        <div class="folder-input">
+          <input type="text" id="mp3-folder" readonly>
+          <button id="select-mp3-btn">Browse</button>
+        </div>
+      </div>
+
+      <div class="modal-buttons">
+        <button id="save-settings-btn">Save</button>
+        <button id="cancel-settings-btn">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="info-overlay" class="hidden">
+    <div id="info-text"></div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
