@@ -1,13 +1,26 @@
 'use strict';
 
-const {app, BrowserWindow, ipcMain, dialog} = require('electron');
+const {app, BrowserWindow, ipcMain, dialog, protocol, net} = require('electron');
 const path = require('path');
 const fs = require('fs');
+const url = require('url');
 const Store = require('electron-store');
 
 const store = new Store();
 
 let mainWindow;
+
+/**
+ * Registers the custom 'media' protocol for serving local media files.
+ */
+function registerMediaProtocol() {
+  protocol.handle('media', (request) => {
+    // Remove 'media://' prefix and decode the path
+    const filePath = decodeURIComponent(request.url.slice('media://'.length));
+    // Use net.fetch to serve the file
+    return net.fetch(url.pathToFileURL(filePath).toString());
+  });
+}
 
 /**
  * Creates the main application window.
@@ -39,6 +52,7 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  registerMediaProtocol();
   createWindow();
 
   app.on('activate', () => {
