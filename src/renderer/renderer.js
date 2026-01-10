@@ -58,6 +58,21 @@ function getRandomItem(array) {
 }
 
 /**
+ * Converts a file path to a proper file:// URL.
+ * Handles Windows paths with backslashes and drive letters.
+ * @param {string} filePath - The file path to convert.
+ * @return {string} The file:// URL.
+ */
+function pathToFileURL(filePath) {
+  // Replace backslashes with forward slashes
+  let url = filePath.replace(/\\/g, '/');
+  // Encode special characters but keep slashes and colons
+  url = encodeURI(url);
+  // Add file:/// prefix (three slashes for absolute paths)
+  return `file:///${url}`;
+}
+
+/**
  * Shows an indicator temporarily.
  * @param {HTMLElement} element - The indicator element to show.
  * @param {number} duration - How long to show the indicator in ms.
@@ -163,7 +178,7 @@ function playRandomVideo(addToHistory = true) {
 function playVideo(videoPath, addToHistory = true) {
   if (!videoPath) return;
 
-  videoPlayer.src = `file://${videoPath}`;
+  videoPlayer.src = pathToFileURL(videoPath);
   videoPlayer.play().catch((err) => {
     console.error('Error playing video:', err);
     showInfo('Error playing video');
@@ -192,7 +207,7 @@ function playRandomAudio() {
   }
 
   const randomAudio = getRandomItem(mp3Files);
-  audioPlayer.src = `file://${randomAudio}`;
+  audioPlayer.src = pathToFileURL(randomAudio);
   audioPlayer.play().catch((err) => {
     console.error('Error playing audio:', err);
   });

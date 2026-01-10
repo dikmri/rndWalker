@@ -108,3 +108,10 @@ elc_ranVids/
 - electron: Electronフレームワーク
 - electron-store: 設定の永続化
 - electron-builder: exeファイルのビルド
+
+## 変更履歴
+
+### 2026-01-11
+
+- 初期実装
+- MP4再生不具合を修正: Windowsファイルパスを正しいfile:// URL形式に変換する`pathToFileURL`関数を追加
