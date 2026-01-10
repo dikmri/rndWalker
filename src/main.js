@@ -10,14 +10,27 @@ const store = new Store();
 
 let mainWindow;
 
+// Register custom protocol as privileged BEFORE app is ready
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'media',
+    privileges: {
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      bypassCSP: true,
+    },
+  },
+]);
+
 /**
- * Registers the custom 'media' protocol for serving local media files.
+ * Registers the custom 'media' protocol handler.
  */
 function registerMediaProtocol() {
   protocol.handle('media', (request) => {
     // Remove 'media://' prefix and decode the path
     const filePath = decodeURIComponent(request.url.slice('media://'.length));
-    // Use net.fetch to serve the file
+    // Use net.fetch to serve the file with proper file URL
     return net.fetch(url.pathToFileURL(filePath).toString());
   });
 }

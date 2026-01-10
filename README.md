@@ -43,21 +43,16 @@
 ```
 elc_ranVids/
 ├── docs/
-│   └── design.md          # 設計書
+│   └── 簡易ユーザマニュアル.md  # ユーザマニュアル
 ├── src/
 │   ├── main.js            # Electronメインプロセス
 │   ├── preload.js         # プリロードスクリプト
-│   ├── renderer/
-│   │   ├── index.html     # メインHTML
-│   │   ├── style.css      # スタイルシート
-│   │   └── renderer.js    # レンダラープロセス
-│   └── settings/
-│       ├── settings.html  # 設定画面HTML
-│       ├── settings.css   # 設定画面スタイル
-│       └── settings.js    # 設定画面スクリプト
+│   └── renderer/
+│       ├── index.html     # メインHTML
+│       ├── style.css      # スタイルシート
+│       └── renderer.js    # レンダラープロセス
 ├── package.json
-├── memo.md
-└── README.md
+└── README.md              # 設計書（このファイル）
 ```
 
 ## 技術詳細
@@ -118,3 +113,4 @@ elc_ranVids/
 - MP4再生不具合を修正: Windowsファイルパスを正しいfile:// URL形式に変換する`pathToFileURL`関数を追加
 - MP4/MP3再生を修正: カスタム`media://`プロトコルを実装してローカルファイルを正しく配信
 - MP3ループ問題を修正: `<audio>`タグから`loop`属性を削除し、再生終了時に次のランダムなファイルを再生するように変更
+- メディア再生を修正: `protocol.registerSchemesAsPrivileged()`でカスタムプロトコルを特権スキームとして登録（stream対応）
