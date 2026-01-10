@@ -29,7 +29,7 @@ let mp3Files = [];
 let currentMp4Index = -1;
 let videoHistory = [];
 let historyIndex = -1;
-let volume = 1.0;
+let volume = 0.1;
 let isMuted = false;
 let indicatorTimeout = null;
 
@@ -58,13 +58,14 @@ function getRandomItem(array) {
 }
 
 /**
- * Converts a file path to a media:// URL for Electron's custom protocol.
+ * Converts a file path to a file:// URL.
  * @param {string} filePath - The file path to convert.
- * @return {string} The media:// URL.
+ * @return {string} The file:// URL.
  */
 function pathToMediaURL(filePath) {
-  // Encode the file path for URL
-  return `media://${encodeURIComponent(filePath)}`;
+  // Replace backslashes with forward slashes for URL format
+  const normalizedPath = filePath.replace(/\\/g, '/');
+  return `file:///${normalizedPath}`;
 }
 
 /**

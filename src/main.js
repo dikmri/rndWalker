@@ -46,6 +46,7 @@ function createWindow() {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      webSecurity: false,
     },
     autoHideMenuBar: true,
   });
@@ -119,8 +120,12 @@ ipcMain.handle('select-mp3-folder', async () => {
  * @param {Object} settings - The settings object containing folder paths.
  */
 ipcMain.handle('save-settings', async (event, settings) => {
-  store.set('mp4FolderPath', settings.mp4FolderPath);
-  store.set('mp3FolderPath', settings.mp3FolderPath);
+  if (settings.mp4FolderPath !== undefined) {
+    store.set('mp4FolderPath', settings.mp4FolderPath);
+  }
+  if (settings.mp3FolderPath !== undefined) {
+    store.set('mp3FolderPath', settings.mp3FolderPath);
+  }
   if (settings.volume !== undefined) {
     store.set('volume', settings.volume);
   }
@@ -134,7 +139,7 @@ ipcMain.handle('load-settings', async () => {
   return {
     mp4FolderPath: store.get('mp4FolderPath', ''),
     mp3FolderPath: store.get('mp3FolderPath', ''),
-    volume: store.get('volume', 1.0),
+    volume: store.get('volume', 0.1),
   };
 });
 

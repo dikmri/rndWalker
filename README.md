@@ -114,3 +114,6 @@ elc_ranVids/
 - MP4/MP3再生を修正: カスタム`media://`プロトコルを実装してローカルファイルを正しく配信
 - MP3ループ問題を修正: `<audio>`タグから`loop`属性を削除し、再生終了時に次のランダムなファイルを再生するように変更
 - メディア再生を修正: `protocol.registerSchemesAsPrivileged()`でカスタムプロトコルを特権スキームとして登録（stream対応）
+- save-settingsエラーを修正: undefined値を保存しないようにチェックを追加
+- 初期ボリュームを10%に変更
+- 映像再生を修正: `webSecurity: false`を設定し、直接`file://`URLでメディアファイルにアクセス
