@@ -202,3 +202,32 @@ ipcMain.handle('toggle-fullscreen', async () => {
 ipcMain.handle('get-fullscreen-status', async () => {
   return mainWindow ? mainWindow.isFullScreen() : false;
 });
+
+/**
+ * Reads a file and returns its base64 data.
+ * @param {Event} event - The IPC event.
+ * @param {string} filePath - The path to the file.
+ */
+ipcMain.handle('read-file-base64', async (event, filePath) => {
+  try {
+    const data = fs.readFileSync(filePath);
+    const base64 = data.toString('base64');
+    const ext = path.extname(filePath).toLowerCase();
+
+    let mimeType = 'application/octet-stream';
+    if (ext === '.mp4') {
+      mimeType = 'video/mp4';
+    } else if (ext === '.mp3') {
+      mimeType = 'audio/mpeg';
+    } else if (ext === '.webm') {
+      mimeType = 'video/webm';
+    } else if (ext === '.ogg') {
+      mimeType = 'audio/ogg';
+    }
+
+    return {data: base64, mimeType};
+  } catch (error) {
+    console.error('Error reading file:', error);
+    return null;
+  }
+});

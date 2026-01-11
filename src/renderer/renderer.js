@@ -57,15 +57,37 @@ function getRandomItem(array) {
   return array[Math.floor(Math.random() * array.length)];
 }
 
+// Store blob URLs to revoke them later
+let currentVideoBlobURL = null;
+let currentAudioBlobURL = null;
+
 /**
- * Converts a file path to a file:// URL.
- * @param {string} filePath - The file path to convert.
- * @return {string} The file:// URL.
+ * Loads a file and creates a blob URL.
+ * @param {string} filePath - The file path to load.
+ * @return {Promise<string|null>} The blob URL or null on error.
  */
-function pathToMediaURL(filePath) {
-  // Replace backslashes with forward slashes for URL format
-  const normalizedPath = filePath.replace(/\\/g, '/');
-  return `file:///${normalizedPath}`;
+async function loadFileAsBlobURL(filePath) {
+  try {
+    const result = await window.electronAPI.readFileAsBase64(filePath);
+    if (!result) {
+      console.error('Failed to read file:', filePath);
+      return null;
+    }
+
+    // Convert base64 to blob
+    const byteCharacters = atob(result.data);
+    const byteNumbers = new Array(byteCharacters.length);
+    for (let i = 0; i < byteCharacters.length; i++) {
+      byteNumbers[i] = byteCharacters.charCodeAt(i);
+    }
+    const byteArray = new Uint8Array(byteNumbers);
+    const blob = new Blob([byteArray], {type: result.mimeType});
+
+    return URL.createObjectURL(blob);
+  } catch (error) {
+    console.error('Error loading file as blob:', error);
+    return null;
+  }
 }
 
 /**
@@ -171,10 +193,27 @@ function playRandomVideo(addToHistory = true) {
  * @param {string} videoPath - The path to the video file.
  * @param {boolean} addToHistory - Whether to add to history.
  */
-function playVideo(videoPath, addToHistory = true) {
+async function playVideo(videoPath, addToHistory = true) {
   if (!videoPath) return;
 
-  videoPlayer.src = pathToMediaURL(videoPath);
+  // Show filename briefly
+  const filename = videoPath.split(/[/\\]/).pop();
+  showInfo(`Loading: ${filename}`, 1000);
+
+  // Revoke previous blob URL to free memory
+  if (currentVideoBlobURL) {
+    URL.revokeObjectURL(currentVideoBlobURL);
+  }
+
+  // Load file as blob URL
+  const blobURL = await loadFileAsBlobURL(videoPath);
+  if (!blobURL) {
+    showInfo('Error loading video');
+    return;
+  }
+
+  currentVideoBlobURL = blobURL;
+  videoPlayer.src = blobURL;
   videoPlayer.play().catch((err) => {
     console.error('Error playing video:', err);
     showInfo('Error playing video');
@@ -189,8 +228,6 @@ function playVideo(videoPath, addToHistory = true) {
     historyIndex = videoHistory.length - 1;
   }
 
-  // Show filename briefly
-  const filename = videoPath.split(/[/\\]/).pop();
   showInfo(filename, 3000);
 }
 

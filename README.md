@@ -117,3 +117,4 @@ elc_ranVids/
 - save-settingsエラーを修正: undefined値を保存しないようにチェックを追加
 - 初期ボリュームを10%に変更
 - 映像再生を修正: `webSecurity: false`を設定し、直接`file://`URLでメディアファイルにアクセス
+- 映像再生を修正: IPC経由でファイルをbase64で読み込み、BlobURLで再生する方式に変更

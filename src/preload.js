@@ -64,4 +64,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onShowInitialSettings: (callback) => {
     ipcRenderer.on('show-initial-settings', callback);
   },
+
+  /**
+   * Reads a file and returns its data as base64.
+   * @param {string} filePath - The file path.
+   * @return {Promise<{data: string, mimeType: string}>} Base64 data and mime type.
+   */
+  readFileAsBase64: (filePath) => ipcRenderer.invoke('read-file-base64', filePath),
 });
