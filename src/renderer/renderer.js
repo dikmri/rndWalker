@@ -490,6 +490,33 @@ async function loadFiles() {
 }
 
 /**
+ * Reloads video files from the configured folder.
+ * Does not interrupt current playback.
+ */
+async function reloadVideoFolder() {
+  log('RELOAD', 'Reloading video folder');
+
+  const settings = await window.electronAPI.loadSettings();
+  if (!settings.mp4FolderPath) {
+    log('RELOAD', 'No MP4 folder configured');
+    showInfo('No video folder configured');
+    return;
+  }
+
+  const oldCount = mp4Files.length;
+  mp4Files = await window.electronAPI.getMp4Files(settings.mp4FolderPath);
+  const newCount = mp4Files.length;
+
+  log('RELOAD', `Video files reloaded: ${oldCount} -> ${newCount} files`);
+
+  // Clear and refill preload buffer with new file list
+  clearPreloadBuffer();
+  fillPreloadBuffer();
+
+  showInfo(`Reloaded: ${newCount} videos`);
+}
+
+/**
  * Opens the settings modal.
  */
 async function openSettings() {
@@ -555,6 +582,12 @@ function handleKeyboard(event) {
   log('KEYBOARD', `Key pressed: ${event.key}`);
 
   switch (event.key) {
+    case 'F5':
+      event.preventDefault();
+      log('KEYBOARD', 'Reloading video folder');
+      reloadVideoFolder();
+      break;
+
     case 'F11':
       event.preventDefault();
       log('KEYBOARD', 'Toggling fullscreen');
