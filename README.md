@@ -122,3 +122,4 @@ elc_ranVids/
 - CSPを修正: `blob:`を明示的に許可
 - 動画プリロードシステムを実装: 3つの動画を先読みしてシームレスな再生を実現
 - 包括的なデバッグログを追加: タイムスタンプとカテゴリ付きのログ出力機能（INIT, VIDEO, AUDIO, PRELOAD, SETTINGS, VOLUME, UI, EVENT, FILE, KEYBOARD, UTIL）
+- 動画再生時のタイトル表示を削除

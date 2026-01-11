@@ -369,8 +369,6 @@ async function playNextVideo(addToHistory = true) {
     historyIndex = videoHistory.length - 1;
     log('VIDEO', `Added to history, index: ${historyIndex}, total: ${videoHistory.length}`);
   }
-
-  showInfo(filename, 3000);
 }
 
 /**
@@ -389,7 +387,6 @@ function previousVideo() {
     videoPlayer.play().catch((err) => {
       logError('VIDEO', `Playback failed: ${filename}`, err);
     });
-    showInfo(filename, 3000);
   } else {
     log('VIDEO', 'No previous video in history');
     showInfo('No previous video in history');
