@@ -118,3 +118,5 @@ elc_ranVids/
 - 初期ボリュームを10%に変更
 - 映像再生を修正: `webSecurity: false`を設定し、直接`file://`URLでメディアファイルにアクセス
 - 映像再生を修正: IPC経由でファイルをbase64で読み込み、BlobURLで再生する方式に変更
+- 音声再生を修正: `playRandomAudio`も同様にBlobURL方式に変更（pathToMediaURL関数の削除による不具合を修正）
+- CSPを修正: `blob:`を明示的に許可

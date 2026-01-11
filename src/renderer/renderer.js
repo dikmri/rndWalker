@@ -68,11 +68,14 @@ let currentAudioBlobURL = null;
  */
 async function loadFileAsBlobURL(filePath) {
   try {
+    console.log('Loading file:', filePath);
     const result = await window.electronAPI.readFileAsBase64(filePath);
     if (!result) {
-      console.error('Failed to read file:', filePath);
+      console.error('Failed to read file (null result):', filePath);
       return null;
     }
+
+    console.log('File loaded, mimeType:', result.mimeType, 'size:', result.data.length);
 
     // Convert base64 to blob
     const byteCharacters = atob(result.data);
@@ -83,7 +86,9 @@ async function loadFileAsBlobURL(filePath) {
     const byteArray = new Uint8Array(byteNumbers);
     const blob = new Blob([byteArray], {type: result.mimeType});
 
-    return URL.createObjectURL(blob);
+    const blobURL = URL.createObjectURL(blob);
+    console.log('Created blob URL:', blobURL);
+    return blobURL;
   } catch (error) {
     console.error('Error loading file as blob:', error);
     return null;
@@ -234,13 +239,25 @@ async function playVideo(videoPath, addToHistory = true) {
 /**
  * Plays a random audio track.
  */
-function playRandomAudio() {
+async function playRandomAudio() {
   if (mp3Files.length === 0) {
     return;
   }
 
+  // Revoke previous blob URL to free memory
+  if (currentAudioBlobURL) {
+    URL.revokeObjectURL(currentAudioBlobURL);
+  }
+
   const randomAudio = getRandomItem(mp3Files);
-  audioPlayer.src = pathToMediaURL(randomAudio);
+  const blobURL = await loadFileAsBlobURL(randomAudio);
+  if (!blobURL) {
+    console.error('Error loading audio:', randomAudio);
+    return;
+  }
+
+  currentAudioBlobURL = blobURL;
+  audioPlayer.src = blobURL;
   audioPlayer.play().catch((err) => {
     console.error('Error playing audio:', err);
   });
