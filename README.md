@@ -120,3 +120,5 @@ elc_ranVids/
 - 映像再生を修正: IPC経由でファイルをbase64で読み込み、BlobURLで再生する方式に変更
 - 音声再生を修正: `playRandomAudio`も同様にBlobURL方式に変更（pathToMediaURL関数の削除による不具合を修正）
 - CSPを修正: `blob:`を明示的に許可
+- 動画プリロードシステムを実装: 3つの動画を先読みしてシームレスな再生を実現
+- 包括的なデバッグログを追加: タイムスタンプとカテゴリ付きのログ出力機能（INIT, VIDEO, AUDIO, PRELOAD, SETTINGS, VOLUME, UI, EVENT, FILE, KEYBOARD, UTIL）

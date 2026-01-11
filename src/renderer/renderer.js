@@ -3,9 +3,40 @@
 /**
  * @fileoverview Renderer process for the random video player.
  * Handles video/audio playback, keyboard shortcuts, and settings.
+ * Features video preloading for seamless playback.
  */
 
+// =============================================================================
+// Debug Logging
+// =============================================================================
+
+/**
+ * Debug log utility with timestamp.
+ * @param {string} category - Log category (e.g., 'VIDEO', 'AUDIO', 'SETTINGS').
+ * @param {string} message - Log message.
+ * @param {...*} args - Additional arguments to log.
+ */
+function log(category, message, ...args) {
+  const timestamp = new Date().toISOString().substr(11, 12);
+  console.log(`[${timestamp}] [${category}] ${message}`, ...args);
+}
+
+/**
+ * Debug error log utility with timestamp.
+ * @param {string} category - Log category.
+ * @param {string} message - Error message.
+ * @param {...*} args - Additional arguments to log.
+ */
+function logError(category, message, ...args) {
+  const timestamp = new Date().toISOString().substr(11, 12);
+  console.error(`[${timestamp}] [${category}] ERROR: ${message}`, ...args);
+}
+
+// =============================================================================
 // DOM Elements
+// =============================================================================
+
+log('INIT', 'Getting DOM elements');
 const videoPlayer = document.getElementById('video-player');
 const audioPlayer = document.getElementById('audio-player');
 const settingsBtn = document.getElementById('settings-btn');
@@ -22,30 +53,34 @@ const volumeIcon = document.getElementById('volume-icon');
 const muteIndicator = document.getElementById('mute-indicator');
 const infoOverlay = document.getElementById('info-overlay');
 const infoText = document.getElementById('info-text');
+log('INIT', 'DOM elements retrieved');
 
+// =============================================================================
 // State
+// =============================================================================
+
 let mp4Files = [];
 let mp3Files = [];
-let currentMp4Index = -1;
 let videoHistory = [];
 let historyIndex = -1;
 let volume = 0.1;
 let isMuted = false;
 let indicatorTimeout = null;
 
-/**
- * Shuffles an array using Fisher-Yates algorithm.
- * @param {Array} array - The array to shuffle.
- * @return {Array} The shuffled array.
- */
-function shuffleArray(array) {
-  const shuffled = [...array];
-  for (let i = shuffled.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
-  }
-  return shuffled;
-}
+// Preload buffer for videos
+const PRELOAD_COUNT = 3;
+let preloadedVideos = []; // Array of {path, blobURL}
+let currentVideoIndex = -1;
+let isPreloading = false;
+
+// Audio state
+let currentAudioBlobURL = null;
+
+log('INIT', 'State variables initialized');
+
+// =============================================================================
+// Utility Functions
+// =============================================================================
 
 /**
  * Gets a random item from an array.
@@ -54,12 +89,23 @@ function shuffleArray(array) {
  */
 function getRandomItem(array) {
   if (array.length === 0) return null;
-  return array[Math.floor(Math.random() * array.length)];
+  const item = array[Math.floor(Math.random() * array.length)];
+  log('UTIL', 'Random item selected from array of', array.length, 'items');
+  return item;
 }
 
-// Store blob URLs to revoke them later
-let currentVideoBlobURL = null;
-let currentAudioBlobURL = null;
+/**
+ * Gets the filename from a path.
+ * @param {string} filePath - The file path.
+ * @return {string} The filename.
+ */
+function getFilename(filePath) {
+  return filePath.split(/[/\\]/).pop();
+}
+
+// =============================================================================
+// File Loading
+// =============================================================================
 
 /**
  * Loads a file and creates a blob URL.
@@ -67,15 +113,20 @@ let currentAudioBlobURL = null;
  * @return {Promise<string|null>} The blob URL or null on error.
  */
 async function loadFileAsBlobURL(filePath) {
+  const filename = getFilename(filePath);
+  log('FILE', `Loading file: ${filename}`);
+
   try {
-    console.log('Loading file:', filePath);
+    const startTime = performance.now();
     const result = await window.electronAPI.readFileAsBase64(filePath);
+
     if (!result) {
-      console.error('Failed to read file (null result):', filePath);
+      logError('FILE', `Failed to read file (null result): ${filename}`);
       return null;
     }
 
-    console.log('File loaded, mimeType:', result.mimeType, 'size:', result.data.length);
+    const loadTime = (performance.now() - startTime).toFixed(2);
+    log('FILE', `File data received: ${filename}, mimeType: ${result.mimeType}, size: ${result.data.length} chars, time: ${loadTime}ms`);
 
     // Convert base64 to blob
     const byteCharacters = atob(result.data);
@@ -87,13 +138,87 @@ async function loadFileAsBlobURL(filePath) {
     const blob = new Blob([byteArray], {type: result.mimeType});
 
     const blobURL = URL.createObjectURL(blob);
-    console.log('Created blob URL:', blobURL);
+    log('FILE', `Blob URL created: ${filename} -> ${blobURL.substring(0, 50)}...`);
     return blobURL;
   } catch (error) {
-    console.error('Error loading file as blob:', error);
+    logError('FILE', `Error loading file: ${filename}`, error);
     return null;
   }
 }
+
+// =============================================================================
+// Video Preloading System
+// =============================================================================
+
+/**
+ * Preloads videos to fill the buffer.
+ */
+async function fillPreloadBuffer() {
+  if (isPreloading) {
+    log('PRELOAD', 'Already preloading, skipping');
+    return;
+  }
+
+  if (mp4Files.length === 0) {
+    log('PRELOAD', 'No MP4 files available');
+    return;
+  }
+
+  isPreloading = true;
+  log('PRELOAD', `Current buffer size: ${preloadedVideos.length}/${PRELOAD_COUNT}`);
+
+  while (preloadedVideos.length < PRELOAD_COUNT) {
+    const videoPath = getRandomItem(mp4Files);
+    const filename = getFilename(videoPath);
+    log('PRELOAD', `Preloading video: ${filename}`);
+
+    const blobURL = await loadFileAsBlobURL(videoPath);
+    if (blobURL) {
+      preloadedVideos.push({path: videoPath, blobURL});
+      log('PRELOAD', `Video preloaded: ${filename}, buffer size: ${preloadedVideos.length}/${PRELOAD_COUNT}`);
+    } else {
+      logError('PRELOAD', `Failed to preload: ${filename}`);
+    }
+  }
+
+  isPreloading = false;
+  log('PRELOAD', 'Preload buffer filled');
+}
+
+/**
+ * Gets the next preloaded video and triggers refill.
+ * @return {{path: string, blobURL: string}|null} The next video or null.
+ */
+function getNextPreloadedVideo() {
+  if (preloadedVideos.length === 0) {
+    log('PRELOAD', 'No preloaded videos available');
+    return null;
+  }
+
+  const video = preloadedVideos.shift();
+  log('PRELOAD', `Using preloaded video: ${getFilename(video.path)}, remaining: ${preloadedVideos.length}`);
+
+  // Trigger refill in background
+  fillPreloadBuffer();
+
+  return video;
+}
+
+/**
+ * Clears all preloaded videos and revokes blob URLs.
+ */
+function clearPreloadBuffer() {
+  log('PRELOAD', `Clearing preload buffer (${preloadedVideos.length} videos)`);
+  for (const video of preloadedVideos) {
+    URL.revokeObjectURL(video.blobURL);
+    log('PRELOAD', `Revoked blob URL for: ${getFilename(video.path)}`);
+  }
+  preloadedVideos = [];
+}
+
+// =============================================================================
+// UI Functions
+// =============================================================================
 
 /**
  * Shows an indicator temporarily.
@@ -101,14 +226,13 @@ async function loadFileAsBlobURL(filePath) {
  * @param {number} duration - How long to show the indicator in ms.
  */
 function showIndicator(element, duration = 1500) {
+  log('UI', 'Showing indicator');
   if (indicatorTimeout) {
     clearTimeout(indicatorTimeout);
   }
 
-  // Hide all indicators first
   volumeIndicator.classList.add('hidden');
   muteIndicator.classList.add('hidden');
-
   element.classList.remove('hidden');
 
   indicatorTimeout = setTimeout(() => {
@@ -122,6 +246,7 @@ function showIndicator(element, duration = 1500) {
  * @param {number} duration - How long to show in ms.
  */
 function showInfo(text, duration = 2000) {
+  log('UI', `Showing info: "${text}"`);
   infoText.textContent = text;
   infoOverlay.classList.remove('hidden');
 
@@ -146,21 +271,29 @@ function updateVolumeIndicator() {
   } else {
     volumeIcon.textContent = '🔊';
   }
+  log('UI', `Volume indicator updated: ${percentage}%`);
 }
+
+// =============================================================================
+// Volume Control
+// =============================================================================
 
 /**
  * Sets the volume for both video and audio players.
  * @param {number} newVolume - The new volume (0-1).
  */
 function setVolume(newVolume) {
+  const oldVolume = volume;
   volume = Math.max(0, Math.min(1, newVolume));
+  log('VOLUME', `Volume changed: ${Math.round(oldVolume * 100)}% -> ${Math.round(volume * 100)}%`);
+
   videoPlayer.volume = isMuted ? 0 : volume;
   audioPlayer.volume = isMuted ? 0 : volume;
   updateVolumeIndicator();
   showIndicator(volumeIndicator);
 
-  // Save volume setting
   window.electronAPI.saveSettings({volume});
+  log('VOLUME', 'Volume setting saved');
 }
 
 /**
@@ -168,6 +301,8 @@ function setVolume(newVolume) {
  */
 function toggleMute() {
   isMuted = !isMuted;
+  log('VOLUME', `Mute toggled: ${isMuted ? 'ON' : 'OFF'}`);
+
   videoPlayer.volume = isMuted ? 0 : volume;
   audioPlayer.volume = isMuted ? 0 : volume;
 
@@ -179,136 +314,180 @@ function toggleMute() {
   }
 }
 
+// =============================================================================
+// Video Playback
+// =============================================================================
+
 /**
- * Plays a random video from the list.
+ * Plays the next video from the preload buffer.
  * @param {boolean} addToHistory - Whether to add to history.
  */
-function playRandomVideo(addToHistory = true) {
+async function playNextVideo(addToHistory = true) {
+  log('VIDEO', 'Playing next video');
+
   if (mp4Files.length === 0) {
+    log('VIDEO', 'No MP4 files available');
     showInfo('No MP4 files found. Please configure folders in settings.');
     return;
   }
 
-  const randomVideo = getRandomItem(mp4Files);
-  playVideo(randomVideo, addToHistory);
-}
+  // Try to get a preloaded video
+  let video = getNextPreloadedVideo();
 
-/**
- * Plays a specific video.
- * @param {string} videoPath - The path to the video file.
- * @param {boolean} addToHistory - Whether to add to history.
- */
-async function playVideo(videoPath, addToHistory = true) {
-  if (!videoPath) return;
-
-  // Show filename briefly
-  const filename = videoPath.split(/[/\\]/).pop();
-  showInfo(`Loading: ${filename}`, 1000);
-
-  // Revoke previous blob URL to free memory
-  if (currentVideoBlobURL) {
-    URL.revokeObjectURL(currentVideoBlobURL);
+  // If no preloaded video, load one directly
+  if (!video) {
+    log('VIDEO', 'No preloaded video, loading directly');
+    const videoPath = getRandomItem(mp4Files);
+    const blobURL = await loadFileAsBlobURL(videoPath);
+    if (!blobURL) {
+      showInfo('Error loading video');
+      return;
+    }
+    video = {path: videoPath, blobURL};
   }
 
-  // Load file as blob URL
-  const blobURL = await loadFileAsBlobURL(videoPath);
-  if (!blobURL) {
-    showInfo('Error loading video');
+  const filename = getFilename(video.path);
+  log('VIDEO', `Playing: ${filename}`);
+
+  // Set video source and play
+  videoPlayer.src = video.blobURL;
+  try {
+    await videoPlayer.play();
+    log('VIDEO', `Playback started: ${filename}`);
+  } catch (err) {
+    logError('VIDEO', `Playback failed: ${filename}`, err);
+    showInfo('Error playing video');
     return;
   }
 
-  currentVideoBlobURL = blobURL;
-  videoPlayer.src = blobURL;
-  videoPlayer.play().catch((err) => {
-    console.error('Error playing video:', err);
-    showInfo('Error playing video');
-  });
-
+  // Update history
   if (addToHistory) {
-    // If we're not at the end of history, truncate future entries
     if (historyIndex < videoHistory.length - 1) {
       videoHistory = videoHistory.slice(0, historyIndex + 1);
     }
-    videoHistory.push(videoPath);
+    videoHistory.push(video);
     historyIndex = videoHistory.length - 1;
+    log('VIDEO', `Added to history, index: ${historyIndex}, total: ${videoHistory.length}`);
   }
 
   showInfo(filename, 3000);
 }
 
 /**
- * Plays a random audio track.
+ * Goes back to the previous video in history.
  */
-async function playRandomAudio() {
-  if (mp3Files.length === 0) {
-    return;
-  }
+function previousVideo() {
+  log('VIDEO', `Previous video requested, history index: ${historyIndex}`);
 
-  // Revoke previous blob URL to free memory
-  if (currentAudioBlobURL) {
-    URL.revokeObjectURL(currentAudioBlobURL);
-  }
+  if (historyIndex > 0) {
+    historyIndex--;
+    const video = videoHistory[historyIndex];
+    const filename = getFilename(video.path);
+    log('VIDEO', `Playing previous: ${filename}`);
 
-  const randomAudio = getRandomItem(mp3Files);
-  const blobURL = await loadFileAsBlobURL(randomAudio);
-  if (!blobURL) {
-    console.error('Error loading audio:', randomAudio);
-    return;
+    videoPlayer.src = video.blobURL;
+    videoPlayer.play().catch((err) => {
+      logError('VIDEO', `Playback failed: ${filename}`, err);
+    });
+    showInfo(filename, 3000);
+  } else {
+    log('VIDEO', 'No previous video in history');
+    showInfo('No previous video in history');
   }
-
-  currentAudioBlobURL = blobURL;
-  audioPlayer.src = blobURL;
-  audioPlayer.play().catch((err) => {
-    console.error('Error playing audio:', err);
-  });
 }
 
 /**
  * Skips to the next random video.
  */
 function nextVideo() {
-  playRandomVideo(true);
+  log('VIDEO', 'Next video requested (skip)');
+  playNextVideo(true);
 }
 
+// =============================================================================
+// Audio Playback
+// =============================================================================
+
 /**
- * Goes back to the previous video in history.
+ * Plays a random audio track.
  */
-function previousVideo() {
-  if (historyIndex > 0) {
-    historyIndex--;
-    playVideo(videoHistory[historyIndex], false);
-  } else {
-    showInfo('No previous video in history');
+async function playRandomAudio() {
+  log('AUDIO', 'Playing random audio');
+
+  if (mp3Files.length === 0) {
+    log('AUDIO', 'No MP3 files available');
+    return;
+  }
+
+  // Revoke previous blob URL
+  if (currentAudioBlobURL) {
+    URL.revokeObjectURL(currentAudioBlobURL);
+    log('AUDIO', 'Previous audio blob URL revoked');
+  }
+
+  const audioPath = getRandomItem(mp3Files);
+  const filename = getFilename(audioPath);
+  log('AUDIO', `Loading: ${filename}`);
+
+  const blobURL = await loadFileAsBlobURL(audioPath);
+  if (!blobURL) {
+    logError('AUDIO', `Failed to load: ${filename}`);
+    return;
+  }
+
+  currentAudioBlobURL = blobURL;
+  audioPlayer.src = blobURL;
+
+  try {
+    await audioPlayer.play();
+    log('AUDIO', `Playback started: ${filename}`);
+  } catch (err) {
+    logError('AUDIO', `Playback failed: ${filename}`, err);
   }
 }
+
+// =============================================================================
+// Settings
+// =============================================================================
 
 /**
  * Loads files from the configured folders.
  */
 async function loadFiles() {
+  log('SETTINGS', 'Loading files from configured folders');
+
   const settings = await window.electronAPI.loadSettings();
+  log('SETTINGS', 'Settings loaded:', settings);
 
   if (settings.mp4FolderPath) {
     mp4Files = await window.electronAPI.getMp4Files(settings.mp4FolderPath);
-    console.log(`Loaded ${mp4Files.length} MP4 files`);
+    log('SETTINGS', `Loaded ${mp4Files.length} MP4 files from ${settings.mp4FolderPath}`);
   }
 
   if (settings.mp3FolderPath) {
     mp3Files = await window.electronAPI.getMp3Files(settings.mp3FolderPath);
-    console.log(`Loaded ${mp3Files.length} MP3 files`);
+    log('SETTINGS', `Loaded ${mp3Files.length} MP3 files from ${settings.mp3FolderPath}`);
   }
 
   if (settings.volume !== undefined) {
     volume = settings.volume;
     videoPlayer.volume = volume;
     audioPlayer.volume = volume;
+    log('SETTINGS', `Volume set to ${Math.round(volume * 100)}%`);
   }
 
-  // Start playback if files are available
+  // Clear old preload buffer and start fresh
+  clearPreloadBuffer();
+
+  // Start preloading and playback
   if (mp4Files.length > 0) {
-    playRandomVideo();
+    log('SETTINGS', 'Starting video preload and playback');
+    await fillPreloadBuffer();
+    playNextVideo();
   }
+
   if (mp3Files.length > 0) {
+    log('SETTINGS', 'Starting audio playback');
     playRandomAudio();
   }
 }
@@ -317,6 +496,7 @@ async function loadFiles() {
  * Opens the settings modal.
  */
 async function openSettings() {
+  log('SETTINGS', 'Opening settings modal');
   const settings = await window.electronAPI.loadSettings();
   mp4FolderInput.value = settings.mp4FolderPath || '';
   mp3FolderInput.value = settings.mp3FolderPath || '';
@@ -327,6 +507,7 @@ async function openSettings() {
  * Closes the settings modal.
  */
 function closeSettings() {
+  log('SETTINGS', 'Closing settings modal');
   settingsModal.classList.add('hidden');
 }
 
@@ -334,10 +515,13 @@ function closeSettings() {
  * Saves the current settings.
  */
 async function saveSettings() {
+  log('SETTINGS', 'Saving settings');
+
   const mp4Path = mp4FolderInput.value;
   const mp3Path = mp3FolderInput.value;
 
   if (!mp4Path || !mp3Path) {
+    log('SETTINGS', 'Validation failed: both folders required');
     showInfo('Please select both folders');
     return;
   }
@@ -348,10 +532,15 @@ async function saveSettings() {
     volume: volume,
   });
 
+  log('SETTINGS', 'Settings saved successfully');
   closeSettings();
   await loadFiles();
   showInfo('Settings saved');
 }
+
+// =============================================================================
+// Keyboard Handling
+// =============================================================================
 
 /**
  * Handles keyboard shortcuts.
@@ -366,9 +555,12 @@ function handleKeyboard(event) {
     return;
   }
 
+  log('KEYBOARD', `Key pressed: ${event.key}`);
+
   switch (event.key) {
     case 'F11':
       event.preventDefault();
+      log('KEYBOARD', 'Toggling fullscreen');
       window.electronAPI.toggleFullscreen();
       break;
 
@@ -398,9 +590,9 @@ function handleKeyboard(event) {
       break;
 
     case 'Escape':
-      // Exit fullscreen if in fullscreen mode
       window.electronAPI.getFullscreenStatus().then((isFullscreen) => {
         if (isFullscreen) {
+          log('KEYBOARD', 'Exiting fullscreen');
           window.electronAPI.toggleFullscreen();
         }
       });
@@ -408,39 +600,69 @@ function handleKeyboard(event) {
   }
 }
 
+// =============================================================================
 // Event Listeners
+// =============================================================================
 
-// Video ended - play next random video
+log('INIT', 'Setting up event listeners');
+
+// Video ended - play next video immediately
 videoPlayer.addEventListener('ended', () => {
-  playRandomVideo();
+  log('EVENT', 'Video ended');
+  playNextVideo();
 });
 
-// Audio ended - play next random audio (though it should loop)
+// Audio ended - play next random audio
 audioPlayer.addEventListener('ended', () => {
+  log('EVENT', 'Audio ended');
   playRandomAudio();
 });
 
+// Video error handling
+videoPlayer.addEventListener('error', (e) => {
+  logError('EVENT', 'Video error:', videoPlayer.error);
+});
+
+// Audio error handling
+audioPlayer.addEventListener('error', (e) => {
+  logError('EVENT', 'Audio error:', audioPlayer.error);
+});
+
 // Settings button
-settingsBtn.addEventListener('click', openSettings);
+settingsBtn.addEventListener('click', () => {
+  log('EVENT', 'Settings button clicked');
+  openSettings();
+});
 
 // Folder selection buttons
 selectMp4Btn.addEventListener('click', async () => {
+  log('EVENT', 'Select MP4 folder button clicked');
   const folder = await window.electronAPI.selectMp4Folder();
   if (folder) {
     mp4FolderInput.value = folder;
+    log('EVENT', `MP4 folder selected: ${folder}`);
   }
 });
 
 selectMp3Btn.addEventListener('click', async () => {
+  log('EVENT', 'Select MP3 folder button clicked');
   const folder = await window.electronAPI.selectMp3Folder();
   if (folder) {
     mp3FolderInput.value = folder;
+    log('EVENT', `MP3 folder selected: ${folder}`);
   }
 });
 
 // Settings modal buttons
-saveSettingsBtn.addEventListener('click', saveSettings);
-cancelSettingsBtn.addEventListener('click', closeSettings);
+saveSettingsBtn.addEventListener('click', () => {
+  log('EVENT', 'Save settings button clicked');
+  saveSettings();
+});
+
+cancelSettingsBtn.addEventListener('click', () => {
+  log('EVENT', 'Cancel settings button clicked');
+  closeSettings();
+});
 
 // Keyboard shortcuts
 document.addEventListener('keydown', handleKeyboard);
@@ -448,16 +670,26 @@ document.addEventListener('keydown', handleKeyboard);
 // Close modal when clicking outside
 settingsModal.addEventListener('click', (event) => {
   if (event.target === settingsModal) {
+    log('EVENT', 'Clicked outside settings modal');
     closeSettings();
   }
 });
 
 // Listen for initial settings prompt
 window.electronAPI.onShowInitialSettings(() => {
+  log('EVENT', 'Initial settings prompt received');
   openSettings();
 });
 
-// Initialize
+log('INIT', 'Event listeners setup complete');
+
+// =============================================================================
+// Initialization
+// =============================================================================
+
 document.addEventListener('DOMContentLoaded', () => {
+  log('INIT', 'DOM content loaded, starting application');
   loadFiles();
 });
+
+log('INIT', 'Renderer script loaded');
