@@ -1,6 +1,6 @@
 {
   "name": "elc-ranvids",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Random video and audio player using Electron",
   "main": "src/main.js",
   "scripts": {
@@ -24,16 +24,20 @@
       "output": "dist"
     },
     "win": {
-      "target": "nsis",
-      "icon": "assets/icon.ico"
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Random Video Player"
     },
     "mac": {
-      "target": "dmg",
-      "icon": "assets/icon.icns"
+      "target": "dmg"
     },
     "linux": {
-      "target": "AppImage",
-      "icon": "assets/icon.png"
+      "target": "AppImage"
     }
   }
 }
