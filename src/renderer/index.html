@@ -20,6 +20,9 @@
       <div id="mute-indicator" class="indicator hidden">
         <span>🔇 Muted</span>
       </div>
+      <div id="folder-indicator" class="indicator hidden">
+        <span id="folder-indicator-text"></span>
+      </div>
     </div>
 
     <button id="settings-btn" title="Settings">⚙</button>
@@ -30,10 +33,28 @@
       <h2>Settings</h2>
 
       <div class="setting-group">
-        <label for="mp4-folder">MP4 Folder:</label>
+        <label for="mp4-folder-0">MP4 Folder 1:</label>
         <div class="folder-input">
-          <input type="text" id="mp4-folder" readonly>
-          <button id="select-mp4-btn">Browse</button>
+          <input type="text" id="mp4-folder-0" readonly>
+          <button id="select-mp4-btn-0">Browse</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label for="mp4-folder-1">MP4 Folder 2 (optional):</label>
+        <div class="folder-input">
+          <input type="text" id="mp4-folder-1" readonly>
+          <button id="select-mp4-btn-1">Browse</button>
+          <button id="clear-mp4-btn-1" class="clear-btn">Clear</button>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <label for="mp4-folder-2">MP4 Folder 3 (optional):</label>
+        <div class="folder-input">
+          <input type="text" id="mp4-folder-2" readonly>
+          <button id="select-mp4-btn-2">Browse</button>
+          <button id="clear-mp4-btn-2" class="clear-btn">Clear</button>
         </div>
       </div>
 

@@ -54,7 +54,8 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, 'renderer', 'index.html'));
 
   // Check if this is the first launch (no folders configured)
-  const mp4Folder = store.get('mp4FolderPath');
+  const mp4FolderPaths = store.get('mp4FolderPaths', null);
+  const mp4Folder = mp4FolderPaths ? mp4FolderPaths[0] : store.get('mp4FolderPath');
   const mp3Folder = store.get('mp3FolderPath');
 
   if (!mp4Folder || !mp3Folder) {
@@ -86,11 +87,13 @@ app.on('window-all-closed', () => {
 
 /**
  * Handles folder selection dialog for MP4 files.
+ * @param {Event} event - The IPC event.
+ * @param {number} folderIndex - The folder index (0, 1, or 2).
  */
-ipcMain.handle('select-mp4-folder', async () => {
+ipcMain.handle('select-mp4-folder', async (event, folderIndex = 0) => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory'],
-    title: 'Select MP4 Folder',
+    title: `Select MP4 Folder ${folderIndex + 1}`,
   });
 
   if (!result.canceled && result.filePaths.length > 0) {
@@ -120,8 +123,8 @@ ipcMain.handle('select-mp3-folder', async () => {
  * @param {Object} settings - The settings object containing folder paths.
  */
 ipcMain.handle('save-settings', async (event, settings) => {
-  if (settings.mp4FolderPath !== undefined) {
-    store.set('mp4FolderPath', settings.mp4FolderPath);
+  if (settings.mp4FolderPaths !== undefined) {
+    store.set('mp4FolderPaths', settings.mp4FolderPaths);
   }
   if (settings.mp3FolderPath !== undefined) {
     store.set('mp3FolderPath', settings.mp3FolderPath);
@@ -136,8 +139,19 @@ ipcMain.handle('save-settings', async (event, settings) => {
  * Loads the saved settings.
  */
 ipcMain.handle('load-settings', async () => {
+  // Backward compatibility: migrate old mp4FolderPath to mp4FolderPaths
+  let mp4FolderPaths = store.get('mp4FolderPaths', null);
+  if (!mp4FolderPaths) {
+    const oldPath = store.get('mp4FolderPath', '');
+    mp4FolderPaths = [oldPath, '', ''];
+  }
+  // Ensure array has 3 elements
+  while (mp4FolderPaths.length < 3) {
+    mp4FolderPaths.push('');
+  }
+
   return {
-    mp4FolderPath: store.get('mp4FolderPath', ''),
+    mp4FolderPaths,
     mp3FolderPath: store.get('mp3FolderPath', ''),
     volume: store.get('volume', 0.1),
   };

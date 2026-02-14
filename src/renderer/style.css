@@ -146,6 +146,15 @@ body {
   background-color: #357abd;
 }
 
+.clear-btn {
+  background-color: #6c757d !important;
+  padding: 10px 15px !important;
+}
+
+.clear-btn:hover {
+  background-color: #5a6268 !important;
+}
+
 .modal-buttons {
   display: flex;
   gap: 10px;

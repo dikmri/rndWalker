@@ -7,10 +7,12 @@ const {contextBridge, ipcRenderer} = require('electron');
  */
 contextBridge.exposeInMainWorld('electronAPI', {
   /**
-   * Opens a dialog to select the MP4 folder.
+   * Opens a dialog to select an MP4 folder.
+   * @param {number} folderIndex - The folder index (0, 1, or 2).
    * @return {Promise<string|null>} The selected folder path or null.
    */
-  selectMp4Folder: () => ipcRenderer.invoke('select-mp4-folder'),
+  selectMp4Folder: (folderIndex = 0) =>
+    ipcRenderer.invoke('select-mp4-folder', folderIndex),
 
   /**
    * Opens a dialog to select the MP3 folder.

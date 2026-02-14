@@ -41,9 +41,22 @@ const videoPlayer = document.getElementById('video-player');
 const audioPlayer = document.getElementById('audio-player');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
-const mp4FolderInput = document.getElementById('mp4-folder');
+const mp4FolderInputs = [
+  document.getElementById('mp4-folder-0'),
+  document.getElementById('mp4-folder-1'),
+  document.getElementById('mp4-folder-2'),
+];
 const mp3FolderInput = document.getElementById('mp3-folder');
-const selectMp4Btn = document.getElementById('select-mp4-btn');
+const selectMp4Btns = [
+  document.getElementById('select-mp4-btn-0'),
+  document.getElementById('select-mp4-btn-1'),
+  document.getElementById('select-mp4-btn-2'),
+];
+const clearMp4Btns = [
+  null, // Folder 1 has no clear button
+  document.getElementById('clear-mp4-btn-1'),
+  document.getElementById('clear-mp4-btn-2'),
+];
 const selectMp3Btn = document.getElementById('select-mp3-btn');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const cancelSettingsBtn = document.getElementById('cancel-settings-btn');
@@ -51,6 +64,8 @@ const volumeIndicator = document.getElementById('volume-indicator');
 const volumeValue = document.getElementById('volume-value');
 const volumeIcon = document.getElementById('volume-icon');
 const muteIndicator = document.getElementById('mute-indicator');
+const folderIndicator = document.getElementById('folder-indicator');
+const folderIndicatorText = document.getElementById('folder-indicator-text');
 const infoOverlay = document.getElementById('info-overlay');
 const infoText = document.getElementById('info-text');
 log('INIT', 'DOM elements retrieved');
@@ -59,13 +74,18 @@ log('INIT', 'DOM elements retrieved');
 // State
 // =============================================================================
 
-let mp4Files = [];
+let mp4FileSets = [[], [], []]; // Array of 3 file arrays, one per folder
 let mp3Files = [];
 let videoHistory = [];
 let historyIndex = -1;
 let volume = 0.1;
 let isMuted = false;
 let indicatorTimeout = null;
+
+// Folder switching state
+// null = all folders, 0/1/2 = specific folder index
+let activeFolder = null;
+let pendingFolder = undefined; // undefined = no pending change
 
 // Preload buffer for videos
 const PRELOAD_COUNT = 3;
@@ -75,6 +95,9 @@ let isPreloading = false;
 
 // Audio state
 let currentAudioBlobURL = null;
+
+// Configured folder count (how many folders have files)
+let configuredFolderCount = 0;
 
 log('INIT', 'State variables initialized');
 
@@ -101,6 +124,30 @@ function getRandomItem(array) {
  */
 function getFilename(filePath) {
   return filePath.split(/[/\\]/).pop();
+}
+
+/**
+ * Gets the active MP4 file list based on active folder selection.
+ * @return {string[]} The array of MP4 file paths.
+ */
+function getActiveMp4Files() {
+  if (activeFolder === null) {
+    // All folders combined
+    return mp4FileSets.flat();
+  }
+  return mp4FileSets[activeFolder] || [];
+}
+
+/**
+ * Gets the label for a folder selection.
+ * @param {number|null} folderIndex - The folder index or null for all.
+ * @return {string} Human-readable folder label.
+ */
+function getFolderLabel(folderIndex) {
+  if (folderIndex === null) {
+    return 'All Folders';
+  }
+  return `Folder ${folderIndex + 1}`;
 }
 
 // =============================================================================
@@ -159,8 +206,9 @@ async function fillPreloadBuffer() {
     return;
   }
 
-  if (mp4Files.length === 0) {
-    log('PRELOAD', 'No MP4 files available');
+  const activeMp4Files = getActiveMp4Files();
+  if (activeMp4Files.length === 0) {
+    log('PRELOAD', 'No MP4 files available for active folder');
     return;
   }
 
@@ -168,7 +216,7 @@ async function fillPreloadBuffer() {
   log('PRELOAD', `Current buffer size: ${preloadedVideos.length}/${PRELOAD_COUNT}`);
 
   while (preloadedVideos.length < PRELOAD_COUNT) {
-    const videoPath = getRandomItem(mp4Files);
+    const videoPath = getRandomItem(activeMp4Files);
     const filename = getFilename(videoPath);
     log('PRELOAD', `Preloading video: ${filename}`);
 
@@ -233,6 +281,7 @@ function showIndicator(element, duration = 1500) {
 
   volumeIndicator.classList.add('hidden');
   muteIndicator.classList.add('hidden');
+  folderIndicator.classList.add('hidden');
   element.classList.remove('hidden');
 
   indicatorTimeout = setTimeout(() => {
@@ -315,6 +364,59 @@ function toggleMute() {
 }
 
 // =============================================================================
+// Folder Switching
+// =============================================================================
+
+/**
+ * Requests a folder switch. The switch takes effect after the current video
+ * finishes playing.
+ * @param {number|null} folderIndex - The folder index (0, 1, 2) or null for all.
+ */
+function switchFolder(folderIndex) {
+  // Ignore if only one folder is configured
+  if (configuredFolderCount <= 1) {
+    log('FOLDER', 'Only one folder configured, ignoring folder switch');
+    return;
+  }
+
+  // If a specific folder is selected, check it has files
+  if (folderIndex !== null && mp4FileSets[folderIndex].length === 0) {
+    log('FOLDER', `Folder ${folderIndex + 1} has no files, ignoring`);
+    showInfo(`Folder ${folderIndex + 1} is empty`);
+    return;
+  }
+
+  pendingFolder = folderIndex;
+  const label = getFolderLabel(folderIndex);
+  log('FOLDER', `Folder switch queued: ${label} (will apply after current video)`);
+
+  // Show folder indicator
+  folderIndicatorText.textContent = `Next: ${label}`;
+  showIndicator(folderIndicator);
+}
+
+/**
+ * Applies a pending folder switch. Called when a video ends.
+ */
+function applyPendingFolderSwitch() {
+  if (pendingFolder === undefined) {
+    return;
+  }
+
+  const label = getFolderLabel(pendingFolder);
+  log('FOLDER', `Applying folder switch: ${label}`);
+
+  activeFolder = pendingFolder;
+  pendingFolder = undefined;
+
+  // Clear preload buffer and refill with new folder's files
+  clearPreloadBuffer();
+  fillPreloadBuffer();
+
+  showInfo(`Now playing: ${label}`);
+}
+
+// =============================================================================
 // Video Playback
 // =============================================================================
 
@@ -325,8 +427,9 @@ function toggleMute() {
 async function playNextVideo(addToHistory = true) {
   log('VIDEO', 'Playing next video');
 
-  if (mp4Files.length === 0) {
-    log('VIDEO', 'No MP4 files available');
+  const activeMp4Files = getActiveMp4Files();
+  if (activeMp4Files.length === 0) {
+    log('VIDEO', 'No MP4 files available for active folder');
     showInfo('No MP4 files found. Please configure folders in settings.');
     return;
   }
@@ -337,7 +440,7 @@ async function playNextVideo(addToHistory = true) {
   // If no preloaded video, load one directly
   if (!video) {
     log('VIDEO', 'No preloaded video, loading directly');
-    const videoPath = getRandomItem(mp4Files);
+    const videoPath = getRandomItem(activeMp4Files);
     const blobURL = await loadFileAsBlobURL(videoPath);
     if (!blobURL) {
       showInfo('Error loading video');
@@ -456,10 +559,21 @@ async function loadFiles() {
   const settings = await window.electronAPI.loadSettings();
   log('SETTINGS', 'Settings loaded:', settings);
 
-  if (settings.mp4FolderPath) {
-    mp4Files = await window.electronAPI.getMp4Files(settings.mp4FolderPath);
-    log('SETTINGS', `Loaded ${mp4Files.length} MP4 files from ${settings.mp4FolderPath}`);
+  // Load MP4 files from up to 3 folders
+  configuredFolderCount = 0;
+  for (let i = 0; i < 3; i++) {
+    const folderPath = settings.mp4FolderPaths[i];
+    if (folderPath) {
+      mp4FileSets[i] = await window.electronAPI.getMp4Files(folderPath);
+      log('SETTINGS', `Loaded ${mp4FileSets[i].length} MP4 files from folder ${i + 1}: ${folderPath}`);
+      if (mp4FileSets[i].length > 0) {
+        configuredFolderCount++;
+      }
+    } else {
+      mp4FileSets[i] = [];
+    }
   }
+  log('SETTINGS', `Configured folder count: ${configuredFolderCount}`);
 
   if (settings.mp3FolderPath) {
     mp3Files = await window.electronAPI.getMp3Files(settings.mp3FolderPath);
@@ -473,11 +587,16 @@ async function loadFiles() {
     log('SETTINGS', `Volume set to ${Math.round(volume * 100)}%`);
   }
 
+  // Reset folder selection
+  activeFolder = null;
+  pendingFolder = undefined;
+
   // Clear old preload buffer and start fresh
   clearPreloadBuffer();
 
   // Start preloading and playback
-  if (mp4Files.length > 0) {
+  const allMp4Files = getActiveMp4Files();
+  if (allMp4Files.length > 0) {
     log('SETTINGS', 'Starting video preload and playback');
     await fillPreloadBuffer();
     playNextVideo();
@@ -494,26 +613,33 @@ async function loadFiles() {
  * Does not interrupt current playback.
  */
 async function reloadVideoFolder() {
-  log('RELOAD', 'Reloading video folder');
+  log('RELOAD', 'Reloading video folders');
 
   const settings = await window.electronAPI.loadSettings();
-  if (!settings.mp4FolderPath) {
-    log('RELOAD', 'No MP4 folder configured');
-    showInfo('No video folder configured');
-    return;
+  let totalCount = 0;
+  configuredFolderCount = 0;
+
+  for (let i = 0; i < 3; i++) {
+    const folderPath = settings.mp4FolderPaths[i];
+    if (folderPath) {
+      mp4FileSets[i] = await window.electronAPI.getMp4Files(folderPath);
+      totalCount += mp4FileSets[i].length;
+      if (mp4FileSets[i].length > 0) {
+        configuredFolderCount++;
+      }
+      log('RELOAD', `Folder ${i + 1}: ${mp4FileSets[i].length} files`);
+    } else {
+      mp4FileSets[i] = [];
+    }
   }
 
-  const oldCount = mp4Files.length;
-  mp4Files = await window.electronAPI.getMp4Files(settings.mp4FolderPath);
-  const newCount = mp4Files.length;
-
-  log('RELOAD', `Video files reloaded: ${oldCount} -> ${newCount} files`);
+  log('RELOAD', `Video files reloaded: ${totalCount} total files`);
 
   // Clear and refill preload buffer with new file list
   clearPreloadBuffer();
   fillPreloadBuffer();
 
-  showInfo(`Reloaded: ${newCount} videos`);
+  showInfo(`Reloaded: ${totalCount} videos`);
 }
 
 /**
@@ -522,7 +648,9 @@ async function reloadVideoFolder() {
 async function openSettings() {
   log('SETTINGS', 'Opening settings modal');
   const settings = await window.electronAPI.loadSettings();
-  mp4FolderInput.value = settings.mp4FolderPath || '';
+  for (let i = 0; i < 3; i++) {
+    mp4FolderInputs[i].value = settings.mp4FolderPaths[i] || '';
+  }
   mp3FolderInput.value = settings.mp3FolderPath || '';
   settingsModal.classList.remove('hidden');
 }
@@ -541,17 +669,17 @@ function closeSettings() {
 async function saveSettings() {
   log('SETTINGS', 'Saving settings');
 
-  const mp4Path = mp4FolderInput.value;
+  const mp4Paths = mp4FolderInputs.map((input) => input.value);
   const mp3Path = mp3FolderInput.value;
 
-  if (!mp4Path || !mp3Path) {
-    log('SETTINGS', 'Validation failed: both folders required');
-    showInfo('Please select both folders');
+  if (!mp4Paths[0] || !mp3Path) {
+    log('SETTINGS', 'Validation failed: MP4 Folder 1 and MP3 folder required');
+    showInfo('Please select MP4 Folder 1 and MP3 folder');
     return;
   }
 
   await window.electronAPI.saveSettings({
-    mp4FolderPath: mp4Path,
+    mp4FolderPaths: mp4Paths,
     mp3FolderPath: mp3Path,
     volume: volume,
   });
@@ -599,24 +727,46 @@ function handleKeyboard(event) {
       toggleMute();
       break;
 
-    case 'ArrowUp':
-      event.preventDefault();
+    // Volume and skip controls (WASD)
+    case 'w':
+    case 'W':
       setVolume(volume + 0.05);
       break;
 
-    case 'ArrowDown':
-      event.preventDefault();
+    case 's':
+    case 'S':
       setVolume(volume - 0.05);
+      break;
+
+    case 'd':
+    case 'D':
+      nextVideo();
+      break;
+
+    case 'a':
+    case 'A':
+      previousVideo();
+      break;
+
+    // Folder switching (Arrow keys)
+    case 'ArrowLeft':
+      event.preventDefault();
+      switchFolder(0);
+      break;
+
+    case 'ArrowUp':
+      event.preventDefault();
+      switchFolder(1);
       break;
 
     case 'ArrowRight':
       event.preventDefault();
-      nextVideo();
+      switchFolder(2);
       break;
 
-    case 'ArrowLeft':
+    case 'ArrowDown':
       event.preventDefault();
-      previousVideo();
+      switchFolder(null);
       break;
 
     case 'Escape':
@@ -636,9 +786,10 @@ function handleKeyboard(event) {
 
 log('INIT', 'Setting up event listeners');
 
-// Video ended - play next video immediately
+// Video ended - apply pending folder switch, then play next video
 videoPlayer.addEventListener('ended', () => {
   log('EVENT', 'Video ended');
+  applyPendingFolderSwitch();
   playNextVideo();
 });
 
@@ -665,14 +816,24 @@ settingsBtn.addEventListener('click', () => {
 });
 
 // Folder selection buttons
-selectMp4Btn.addEventListener('click', async () => {
-  log('EVENT', 'Select MP4 folder button clicked');
-  const folder = await window.electronAPI.selectMp4Folder();
-  if (folder) {
-    mp4FolderInput.value = folder;
-    log('EVENT', `MP4 folder selected: ${folder}`);
-  }
-});
+for (let i = 0; i < 3; i++) {
+  selectMp4Btns[i].addEventListener('click', async () => {
+    log('EVENT', `Select MP4 folder ${i + 1} button clicked`);
+    const folder = await window.electronAPI.selectMp4Folder(i);
+    if (folder) {
+      mp4FolderInputs[i].value = folder;
+      log('EVENT', `MP4 folder ${i + 1} selected: ${folder}`);
+    }
+  });
+}
+
+// Clear buttons for optional folders
+for (let i = 1; i < 3; i++) {
+  clearMp4Btns[i].addEventListener('click', () => {
+    log('EVENT', `Clear MP4 folder ${i + 1}`);
+    mp4FolderInputs[i].value = '';
+  });
+}
 
 selectMp3Btn.addEventListener('click', async () => {
   log('EVENT', 'Select MP3 folder button clicked');
