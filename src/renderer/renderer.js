@@ -41,22 +41,31 @@ const videoPlayer = document.getElementById('video-player');
 const audioPlayer = document.getElementById('audio-player');
 const settingsBtn = document.getElementById('settings-btn');
 const settingsModal = document.getElementById('settings-modal');
-const mp4FolderInputs = [
-  document.getElementById('mp4-folder-0'),
-  document.getElementById('mp4-folder-1'),
-  document.getElementById('mp4-folder-2'),
-];
+
+// 2D array of folder inputs: mp4FolderInputs[group][sub]
+const NUM_GROUPS = 3;
+const MAX_SUBS = 4; // 1 base + 3 additional
+const mp4FolderInputs = [];
+const selectMp4Btns = [];
+for (let g = 0; g < NUM_GROUPS; g++) {
+  mp4FolderInputs[g] = [];
+  selectMp4Btns[g] = [];
+  for (let s = 0; s < MAX_SUBS; s++) {
+    mp4FolderInputs[g][s] = document.getElementById(`mp4-folder-${g}-${s}`);
+    selectMp4Btns[g][s] = document.getElementById(`select-mp4-btn-${g}-${s}`);
+  }
+}
+
+const addSubBtns = [];
+const clearGroupBtns = [null]; // Group 0 has no clear button
+for (let g = 0; g < NUM_GROUPS; g++) {
+  addSubBtns[g] = document.getElementById(`add-sub-btn-${g}`);
+  if (g > 0) {
+    clearGroupBtns[g] = document.getElementById(`clear-group-btn-${g}`);
+  }
+}
+
 const mp3FolderInput = document.getElementById('mp3-folder');
-const selectMp4Btns = [
-  document.getElementById('select-mp4-btn-0'),
-  document.getElementById('select-mp4-btn-1'),
-  document.getElementById('select-mp4-btn-2'),
-];
-const clearMp4Btns = [
-  null, // Folder 1 has no clear button
-  document.getElementById('clear-mp4-btn-1'),
-  document.getElementById('clear-mp4-btn-2'),
-];
 const selectMp3Btn = document.getElementById('select-mp3-btn');
 const saveSettingsBtn = document.getElementById('save-settings-btn');
 const cancelSettingsBtn = document.getElementById('cancel-settings-btn');
@@ -559,18 +568,22 @@ async function loadFiles() {
   const settings = await window.electronAPI.loadSettings();
   log('SETTINGS', 'Settings loaded:', settings);
 
-  // Load MP4 files from up to 3 folders
+  // Load MP4 files from up to 3 groups, each with up to 4 sub-folders
   configuredFolderCount = 0;
-  for (let i = 0; i < 3; i++) {
-    const folderPath = settings.mp4FolderPaths[i];
-    if (folderPath) {
-      mp4FileSets[i] = await window.electronAPI.getMp4Files(folderPath);
-      log('SETTINGS', `Loaded ${mp4FileSets[i].length} MP4 files from folder ${i + 1}: ${folderPath}`);
-      if (mp4FileSets[i].length > 0) {
-        configuredFolderCount++;
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    const groupPaths = settings.mp4FolderPaths[g];
+    const groupFiles = [];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      const folderPath = groupPaths[s];
+      if (folderPath) {
+        const files = await window.electronAPI.getMp4Files(folderPath);
+        groupFiles.push(...files);
+        log('SETTINGS', `Loaded ${files.length} MP4 files from folder ${g + 1}-${s + 1}: ${folderPath}`);
       }
-    } else {
-      mp4FileSets[i] = [];
+    }
+    mp4FileSets[g] = groupFiles;
+    if (groupFiles.length > 0) {
+      configuredFolderCount++;
     }
   }
   log('SETTINGS', `Configured folder count: ${configuredFolderCount}`);
@@ -619,18 +632,22 @@ async function reloadVideoFolder() {
   let totalCount = 0;
   configuredFolderCount = 0;
 
-  for (let i = 0; i < 3; i++) {
-    const folderPath = settings.mp4FolderPaths[i];
-    if (folderPath) {
-      mp4FileSets[i] = await window.electronAPI.getMp4Files(folderPath);
-      totalCount += mp4FileSets[i].length;
-      if (mp4FileSets[i].length > 0) {
-        configuredFolderCount++;
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    const groupPaths = settings.mp4FolderPaths[g];
+    const groupFiles = [];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      const folderPath = groupPaths[s];
+      if (folderPath) {
+        const files = await window.electronAPI.getMp4Files(folderPath);
+        groupFiles.push(...files);
       }
-      log('RELOAD', `Folder ${i + 1}: ${mp4FileSets[i].length} files`);
-    } else {
-      mp4FileSets[i] = [];
     }
+    mp4FileSets[g] = groupFiles;
+    totalCount += groupFiles.length;
+    if (groupFiles.length > 0) {
+      configuredFolderCount++;
+    }
+    log('RELOAD', `Folder ${g + 1}: ${groupFiles.length} files`);
   }
 
   log('RELOAD', `Video files reloaded: ${totalCount} total files`);
@@ -648,9 +665,27 @@ async function reloadVideoFolder() {
 async function openSettings() {
   log('SETTINGS', 'Opening settings modal');
   const settings = await window.electronAPI.loadSettings();
-  for (let i = 0; i < 3; i++) {
-    mp4FolderInputs[i].value = settings.mp4FolderPaths[i] || '';
+
+  // Populate 2D folder inputs and show/hide sub-folder rows
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    const groupPaths = settings.mp4FolderPaths[g];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      mp4FolderInputs[g][s].value = groupPaths[s] || '';
+
+      // Show sub-folder row if it has a value
+      if (s > 0) {
+        const subRow = document.getElementById(`sub-folder-${g}-${s}`);
+        if (subRow) {
+          if (groupPaths[s]) {
+            subRow.classList.remove('hidden');
+          } else {
+            subRow.classList.add('hidden');
+          }
+        }
+      }
+    }
   }
+
   mp3FolderInput.value = settings.mp3FolderPath || '';
   settingsModal.classList.remove('hidden');
 }
@@ -669,17 +704,24 @@ function closeSettings() {
 async function saveSettings() {
   log('SETTINGS', 'Saving settings');
 
-  const mp4Paths = mp4FolderInputs.map((input) => input.value);
+  // Collect 2D folder paths
+  const mp4FolderPaths = [];
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    mp4FolderPaths[g] = [];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      mp4FolderPaths[g][s] = mp4FolderInputs[g][s].value || '';
+    }
+  }
   const mp3Path = mp3FolderInput.value;
 
-  if (!mp4Paths[0] || !mp3Path) {
+  if (!mp4FolderPaths[0][0] || !mp3Path) {
     log('SETTINGS', 'Validation failed: MP4 Folder 1 and MP3 folder required');
     showInfo('Please select MP4 Folder 1 and MP3 folder');
     return;
   }
 
   await window.electronAPI.saveSettings({
-    mp4FolderPaths: mp4Paths,
+    mp4FolderPaths,
     mp3FolderPath: mp3Path,
     volume: volume,
   });
@@ -815,24 +857,71 @@ settingsBtn.addEventListener('click', () => {
   openSettings();
 });
 
-// Folder selection buttons
-for (let i = 0; i < 3; i++) {
-  selectMp4Btns[i].addEventListener('click', async () => {
-    log('EVENT', `Select MP4 folder ${i + 1} button clicked`);
-    const folder = await window.electronAPI.selectMp4Folder(i);
-    if (folder) {
-      mp4FolderInputs[i].value = folder;
-      log('EVENT', `MP4 folder ${i + 1} selected: ${folder}`);
-    }
-  });
-}
+// Folder selection buttons (all groups × subs)
+for (let g = 0; g < NUM_GROUPS; g++) {
+  for (let s = 0; s < MAX_SUBS; s++) {
+    const group = g;
+    const sub = s;
+    selectMp4Btns[group][sub].addEventListener('click', async () => {
+      log('EVENT', `Select MP4 folder ${group + 1}-${sub + 1} button clicked`);
+      const folder = await window.electronAPI.selectMp4Folder(group);
+      if (folder) {
+        mp4FolderInputs[group][sub].value = folder;
+        log('EVENT', `MP4 folder ${group + 1}-${sub + 1} selected: ${folder}`);
+      }
+    });
+  }
 
-// Clear buttons for optional folders
-for (let i = 1; i < 3; i++) {
-  clearMp4Btns[i].addEventListener('click', () => {
-    log('EVENT', `Clear MP4 folder ${i + 1}`);
-    mp4FolderInputs[i].value = '';
-  });
+  // Add sub-folder button
+  addSubBtns[g].addEventListener('click', (() => {
+    const group = g;
+    return () => {
+      log('EVENT', `Add sub-folder to group ${group + 1}`);
+      // Find the first hidden sub-folder row and show it
+      for (let s = 1; s < MAX_SUBS; s++) {
+        const subRow = document.getElementById(`sub-folder-${group}-${s}`);
+        if (subRow && subRow.classList.contains('hidden')) {
+          subRow.classList.remove('hidden');
+          log('EVENT', `Showing sub-folder ${group + 1}-${s + 1}`);
+          break;
+        }
+      }
+    };
+  })());
+
+  // Remove sub-folder buttons
+  for (let s = 1; s < MAX_SUBS; s++) {
+    const group = g;
+    const sub = s;
+    const removeBtn = document.getElementById(`remove-sub-btn-${group}-${sub}`);
+    if (removeBtn) {
+      removeBtn.addEventListener('click', () => {
+        log('EVENT', `Remove sub-folder ${group + 1}-${sub + 1}`);
+        mp4FolderInputs[group][sub].value = '';
+        const subRow = document.getElementById(`sub-folder-${group}-${sub}`);
+        if (subRow) {
+          subRow.classList.add('hidden');
+        }
+      });
+    }
+  }
+
+  // Clear group buttons (groups 1 and 2 only)
+  if (clearGroupBtns[g]) {
+    const group = g;
+    clearGroupBtns[group].addEventListener('click', () => {
+      log('EVENT', `Clear group ${group + 1}`);
+      for (let s = 0; s < MAX_SUBS; s++) {
+        mp4FolderInputs[group][s].value = '';
+        if (s > 0) {
+          const subRow = document.getElementById(`sub-folder-${group}-${s}`);
+          if (subRow) {
+            subRow.classList.add('hidden');
+          }
+        }
+      }
+    });
+  }
 }
 
 selectMp3Btn.addEventListener('click', async () => {

@@ -55,7 +55,14 @@ function createWindow() {
 
   // Check if this is the first launch (no folders configured)
   const mp4FolderPaths = store.get('mp4FolderPaths', null);
-  const mp4Folder = mp4FolderPaths ? mp4FolderPaths[0] : store.get('mp4FolderPath');
+  let mp4Folder;
+  if (mp4FolderPaths && Array.isArray(mp4FolderPaths[0])) {
+    mp4Folder = mp4FolderPaths[0][0]; // 2D array
+  } else if (mp4FolderPaths) {
+    mp4Folder = mp4FolderPaths[0]; // 1D array
+  } else {
+    mp4Folder = store.get('mp4FolderPath'); // old single path
+  }
   const mp3Folder = store.get('mp3FolderPath');
 
   if (!mp4Folder || !mp3Folder) {
@@ -139,15 +146,26 @@ ipcMain.handle('save-settings', async (event, settings) => {
  * Loads the saved settings.
  */
 ipcMain.handle('load-settings', async () => {
-  // Backward compatibility: migrate old mp4FolderPath to mp4FolderPaths
+  const emptyGroup = () => ['', '', '', ''];
+
+  // Backward compatibility: migrate old formats to 2D array
   let mp4FolderPaths = store.get('mp4FolderPaths', null);
   if (!mp4FolderPaths) {
+    // Very old format: single path
     const oldPath = store.get('mp4FolderPath', '');
-    mp4FolderPaths = [oldPath, '', ''];
+    mp4FolderPaths = [[oldPath, '', '', ''], emptyGroup(), emptyGroup()];
+  } else if (typeof mp4FolderPaths[0] === 'string') {
+    // Previous format: 1D array of 3 strings
+    mp4FolderPaths = mp4FolderPaths.map((p) => [p || '', '', '', '']);
   }
-  // Ensure array has 3 elements
+  // Ensure 3 groups, each with 4 elements
   while (mp4FolderPaths.length < 3) {
-    mp4FolderPaths.push('');
+    mp4FolderPaths.push(emptyGroup());
+  }
+  for (let i = 0; i < 3; i++) {
+    while (mp4FolderPaths[i].length < 4) {
+      mp4FolderPaths[i].push('');
+    }
   }
 
   return {

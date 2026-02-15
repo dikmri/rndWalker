@@ -155,6 +155,40 @@ body {
   background-color: #5a6268 !important;
 }
 
+.add-btn {
+  background-color: #28a745 !important;
+  padding: 10px 14px !important;
+  font-size: 16px !important;
+  font-weight: bold;
+  min-width: 36px;
+}
+
+.add-btn:hover {
+  background-color: #218838 !important;
+}
+
+.remove-btn {
+  background-color: #dc3545 !important;
+  padding: 10px 14px !important;
+  font-size: 16px !important;
+  font-weight: bold;
+  min-width: 36px;
+}
+
+.remove-btn:hover {
+  background-color: #c82333 !important;
+}
+
+.sub-folder {
+  padding-left: 20px;
+}
+
+.folder-group {
+  margin-bottom: 10px;
+  border-bottom: 1px solid #444;
+  padding-bottom: 10px;
+}
+
 .modal-buttons {
   display: flex;
   gap: 10px;
