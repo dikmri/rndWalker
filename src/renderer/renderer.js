@@ -159,6 +159,16 @@ function getFolderLabel(folderIndex) {
   return `Folder ${folderIndex + 1}`;
 }
 
+/**
+ * Updates the window title with the current folder label and video count.
+ */
+function updateTitle() {
+  const label = getFolderLabel(activeFolder);
+  const count = getActiveMp4Files().length;
+  document.title = `Random Video Player - ${label} (${count} videos)`;
+  log('UI', `Title updated: ${document.title}`);
+}
+
 // =============================================================================
 // File Loading
 // =============================================================================
@@ -423,6 +433,7 @@ function applyPendingFolderSwitch() {
   fillPreloadBuffer();
 
   showInfo(`Now playing: ${label}`);
+  updateTitle();
 }
 
 // =============================================================================
@@ -603,6 +614,7 @@ async function loadFiles() {
   // Reset folder selection
   activeFolder = null;
   pendingFolder = undefined;
+  updateTitle();
 
   // Clear old preload buffer and start fresh
   clearPreloadBuffer();
@@ -656,6 +668,7 @@ async function reloadVideoFolder() {
   clearPreloadBuffer();
   fillPreloadBuffer();
 
+  updateTitle();
   showInfo(`Reloaded: ${totalCount} videos`);
 }
 
