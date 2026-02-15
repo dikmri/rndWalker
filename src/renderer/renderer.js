@@ -634,18 +634,18 @@ async function loadFiles() {
 }
 
 /**
- * Reloads video files from the configured folder.
+ * Reloads video files from the configured folders.
+ * When a specific folder is active, only that folder is reloaded.
  * Does not interrupt current playback.
  */
 async function reloadVideoFolder() {
-  log('RELOAD', 'Reloading video folders');
-
   const settings = await window.electronAPI.loadSettings();
   let totalCount = 0;
-  configuredFolderCount = 0;
 
-  for (let g = 0; g < NUM_GROUPS; g++) {
-    const groupPaths = settings.mp4FolderPaths[g];
+  if (activeFolder !== null) {
+    // Reload only the active folder
+    log('RELOAD', `Reloading folder ${activeFolder + 1} only`);
+    const groupPaths = settings.mp4FolderPaths[activeFolder];
     const groupFiles = [];
     for (let s = 0; s < MAX_SUBS; s++) {
       const folderPath = groupPaths[s];
@@ -654,12 +654,30 @@ async function reloadVideoFolder() {
         groupFiles.push(...files);
       }
     }
-    mp4FileSets[g] = groupFiles;
-    totalCount += groupFiles.length;
-    if (groupFiles.length > 0) {
-      configuredFolderCount++;
+    mp4FileSets[activeFolder] = groupFiles;
+    totalCount = groupFiles.length;
+    log('RELOAD', `Folder ${activeFolder + 1}: ${groupFiles.length} files`);
+  } else {
+    // Reload all folders
+    log('RELOAD', 'Reloading all video folders');
+    configuredFolderCount = 0;
+    for (let g = 0; g < NUM_GROUPS; g++) {
+      const groupPaths = settings.mp4FolderPaths[g];
+      const groupFiles = [];
+      for (let s = 0; s < MAX_SUBS; s++) {
+        const folderPath = groupPaths[s];
+        if (folderPath) {
+          const files = await window.electronAPI.getMp4Files(folderPath);
+          groupFiles.push(...files);
+        }
+      }
+      mp4FileSets[g] = groupFiles;
+      totalCount += groupFiles.length;
+      if (groupFiles.length > 0) {
+        configuredFolderCount++;
+      }
+      log('RELOAD', `Folder ${g + 1}: ${groupFiles.length} files`);
     }
-    log('RELOAD', `Folder ${g + 1}: ${groupFiles.length} files`);
   }
 
   log('RELOAD', `Video files reloaded: ${totalCount} total files`);
@@ -669,7 +687,8 @@ async function reloadVideoFolder() {
   fillPreloadBuffer();
 
   updateTitle();
-  showInfo(`Reloaded: ${totalCount} videos`);
+  const label = getFolderLabel(activeFolder);
+  showInfo(`Reloaded ${label}: ${totalCount} videos`);
 }
 
 /**
