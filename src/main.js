@@ -263,3 +263,38 @@ ipcMain.handle('read-file-base64', async (event, filePath) => {
     return null;
   }
 });
+
+// Preset management
+
+/**
+ * Saves a folder preset.
+ * @param {Event} event - The IPC event.
+ * @param {string} name - The preset name.
+ * @param {Object} data - The preset data (mp4FolderPaths, mp3FolderPath).
+ */
+ipcMain.handle('save-preset', async (event, name, data) => {
+  const presets = store.get('presets', {});
+  presets[name] = data;
+  store.set('presets', presets);
+  return true;
+});
+
+/**
+ * Loads all saved presets.
+ * @return {Object} The presets object {name: data, ...}.
+ */
+ipcMain.handle('load-presets', async () => {
+  return store.get('presets', {});
+});
+
+/**
+ * Deletes a preset by name.
+ * @param {Event} event - The IPC event.
+ * @param {string} name - The preset name to delete.
+ */
+ipcMain.handle('delete-preset', async (event, name) => {
+  const presets = store.get('presets', {});
+  delete presets[name];
+  store.set('presets', presets);
+  return true;
+});

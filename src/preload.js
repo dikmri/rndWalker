@@ -73,4 +73,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * @return {Promise<{data: string, mimeType: string}>} Base64 data and mime type.
    */
   readFileAsBase64: (filePath) => ipcRenderer.invoke('read-file-base64', filePath),
+
+  /**
+   * Saves a folder preset.
+   * @param {string} name - The preset name.
+   * @param {Object} data - The preset data.
+   * @return {Promise<boolean>} True if saved successfully.
+   */
+  savePreset: (name, data) => ipcRenderer.invoke('save-preset', name, data),
+
+  /**
+   * Loads all saved presets.
+   * @return {Promise<Object>} The presets object.
+   */
+  loadPresets: () => ipcRenderer.invoke('load-presets'),
+
+  /**
+   * Deletes a preset by name.
+   * @param {string} name - The preset name to delete.
+   * @return {Promise<boolean>} True if deleted successfully.
+   */
+  deletePreset: (name) => ipcRenderer.invoke('delete-preset', name),
 });

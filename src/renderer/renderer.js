@@ -77,6 +77,11 @@ const folderIndicator = document.getElementById('folder-indicator');
 const folderIndicatorText = document.getElementById('folder-indicator-text');
 const infoOverlay = document.getElementById('info-overlay');
 const infoText = document.getElementById('info-text');
+const presetSelect = document.getElementById('preset-select');
+const presetNameInput = document.getElementById('preset-name-input');
+const loadPresetBtn = document.getElementById('load-preset-btn');
+const savePresetBtn = document.getElementById('save-preset-btn');
+const deletePresetBtn = document.getElementById('delete-preset-btn');
 log('INIT', 'DOM elements retrieved');
 
 // =============================================================================
@@ -719,6 +724,11 @@ async function openSettings() {
   }
 
   mp3FolderInput.value = settings.mp3FolderPath || '';
+
+  // Load presets into dropdown
+  await refreshPresetList();
+  presetNameInput.value = '';
+
   settingsModal.classList.remove('hidden');
 }
 
@@ -728,6 +738,122 @@ async function openSettings() {
 function closeSettings() {
   log('SETTINGS', 'Closing settings modal');
   settingsModal.classList.add('hidden');
+}
+
+// =============================================================================
+// Preset Management
+// =============================================================================
+
+/**
+ * Refreshes the preset dropdown list.
+ */
+async function refreshPresetList() {
+  log('PRESET', 'Refreshing preset list');
+  const presets = await window.electronAPI.loadPresets();
+  const names = Object.keys(presets);
+
+  presetSelect.innerHTML = '<option value="">-- Select Preset --</option>';
+  for (const name of names) {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    presetSelect.appendChild(option);
+  }
+  log('PRESET', `Loaded ${names.length} presets`);
+}
+
+/**
+ * Saves the current folder inputs as a preset.
+ */
+async function saveCurrentAsPreset() {
+  const name = presetNameInput.value.trim();
+  if (!name) {
+    log('PRESET', 'Save failed: no name provided');
+    showInfo('Please enter a preset name');
+    return;
+  }
+
+  const mp4FolderPaths = [];
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    mp4FolderPaths[g] = [];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      mp4FolderPaths[g][s] = mp4FolderInputs[g][s].value || '';
+    }
+  }
+
+  const data = {
+    mp4FolderPaths,
+    mp3FolderPath: mp3FolderInput.value || '',
+  };
+
+  await window.electronAPI.savePreset(name, data);
+  log('PRESET', `Preset saved: "${name}"`);
+  showInfo(`Preset saved: ${name}`);
+
+  await refreshPresetList();
+  presetSelect.value = name;
+  presetNameInput.value = '';
+}
+
+/**
+ * Loads the selected preset into the folder inputs.
+ */
+async function loadSelectedPreset() {
+  const name = presetSelect.value;
+  if (!name) {
+    log('PRESET', 'Load failed: no preset selected');
+    showInfo('Please select a preset');
+    return;
+  }
+
+  const presets = await window.electronAPI.loadPresets();
+  const data = presets[name];
+  if (!data) {
+    logError('PRESET', `Preset not found: "${name}"`);
+    return;
+  }
+
+  log('PRESET', `Loading preset: "${name}"`);
+
+  // Populate folder inputs from preset
+  for (let g = 0; g < NUM_GROUPS; g++) {
+    const groupPaths = data.mp4FolderPaths[g] || ['', '', '', ''];
+    for (let s = 0; s < MAX_SUBS; s++) {
+      mp4FolderInputs[g][s].value = groupPaths[s] || '';
+
+      if (s > 0) {
+        const subRow = document.getElementById(`sub-folder-${g}-${s}`);
+        if (subRow) {
+          if (groupPaths[s]) {
+            subRow.classList.remove('hidden');
+          } else {
+            subRow.classList.add('hidden');
+          }
+        }
+      }
+    }
+  }
+  mp3FolderInput.value = data.mp3FolderPath || '';
+
+  showInfo(`Preset loaded: ${name}`);
+}
+
+/**
+ * Deletes the selected preset.
+ */
+async function deleteSelectedPreset() {
+  const name = presetSelect.value;
+  if (!name) {
+    log('PRESET', 'Delete failed: no preset selected');
+    showInfo('Please select a preset');
+    return;
+  }
+
+  await window.electronAPI.deletePreset(name);
+  log('PRESET', `Preset deleted: "${name}"`);
+  showInfo(`Preset deleted: ${name}`);
+
+  await refreshPresetList();
 }
 
 /**
@@ -963,6 +1089,22 @@ selectMp3Btn.addEventListener('click', async () => {
     mp3FolderInput.value = folder;
     log('EVENT', `MP3 folder selected: ${folder}`);
   }
+});
+
+// Preset buttons
+savePresetBtn.addEventListener('click', () => {
+  log('EVENT', 'Save preset button clicked');
+  saveCurrentAsPreset();
+});
+
+loadPresetBtn.addEventListener('click', () => {
+  log('EVENT', 'Load preset button clicked');
+  loadSelectedPreset();
+});
+
+deletePresetBtn.addEventListener('click', () => {
+  log('EVENT', 'Delete preset button clicked');
+  deleteSelectedPreset();
 });
 
 // Settings modal buttons
