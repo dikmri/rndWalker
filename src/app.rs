@@ -86,7 +86,7 @@ impl RndWalkerApp {
         app.init_audio();
 
         if app.settings.is_configured() {
-            app.reload_library(cc.egui_ctx);
+            app.reload_library(&cc.egui_ctx);
         } else {
             app.show_settings = true;
             app.show_info("初回設定: MP4フォルダ1とMP3フォルダを選択してください");
