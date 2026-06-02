@@ -75,14 +75,20 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          echo "C:\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "PKG_CONFIG_PATH=C:/mingw64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          $mingw = "C:\msys64\mingw64"
+          $pkgConfig = Join-Path $mingw "bin\pkg-config.exe"
+          if (!(Test-Path -LiteralPath $pkgConfig)) {
+            $pkgConfig = Join-Path $mingw "bin\pkgconf.exe"
+          }
+          $pkgConfig = $pkgConfig.Replace("\", "/")
+          echo "$mingw\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "PKG_CONFIG_PATH=C:/msys64/mingw64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG_ALLOW_CROSS=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PKG_CONFIG=pkg-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PKG_CONFIG_EXECUTABLE=pkg-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PKG_CONFIG_x86_64_pc_windows_gnu=pkg-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG_EXECUTABLE=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG_x86_64_pc_windows_gnu=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG_ALLOW_CROSS_x86_64_pc_windows_gnu=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PKG_CONFIG_PATH_x86_64_pc_windows_gnu=C:/mingw64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG_PATH_x86_64_pc_windows_gnu=C:/msys64/mingw64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CFLAGS=-std=gnu17" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CXXFLAGS=-std=gnu++17" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -91,9 +97,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Get-Command pkg-config
-          pkg-config --version
-          pkg-config --libs --cflags libavutil
+          & $env:PKG_CONFIG --version
+          & $env:PKG_CONFIG --libs --cflags libavutil
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
