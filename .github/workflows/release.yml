@@ -9,6 +9,9 @@ on:
 permissions:
   contents: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   build:
     name: Build ${{ matrix.target }}
@@ -29,7 +32,7 @@ jobs:
             target: aarch64-apple-darwin
             binary: rndWalker
             archive: rndWalker-${{ github.ref_name }}-aarch64-apple-darwin.zip
-          - os: windows-latest
+          - os: windows-2025
             target: x86_64-pc-windows-gnu
             binary: rndWalker.exe
             archive: rndWalker-${{ github.ref_name }}-x86_64-pc-windows-gnu.zip
@@ -73,9 +76,12 @@ jobs:
         shell: pwsh
         run: |
           echo "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "PKG_CONFIG_PATH=C:\msys64\mingw64\lib\pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG_PATH=C:/msys64/mingw64/lib/pkgconfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG_ALLOW_CROSS=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "PKG_CONFIG=C:\msys64\mingw64\bin\pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG=C:/msys64/mingw64/bin/pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "PKG_CONFIG_EXECUTABLE=C:/msys64/mingw64/bin/pkgconf.exe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CFLAGS=-std=gnu17" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "CXXFLAGS=-std=gnu++17" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "CMAKE_POLICY_VERSION_MINIMUM=3.5" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Build
