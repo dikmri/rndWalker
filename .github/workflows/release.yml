@@ -77,7 +77,21 @@ jobs:
             mingw-w64-x86_64-gcc
             mingw-w64-x86_64-cmake
             mingw-w64-x86_64-pkgconf
-            mingw-w64-x86_64-ffmpeg
+
+      - name: Install Windows FFmpeg
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n7.1-latest-win64-lgpl-shared-7.1.zip"
+          $archive = Join-Path $env:RUNNER_TEMP "ffmpeg-7.1.zip"
+          $root = Join-Path $env:RUNNER_TEMP "ffmpeg-7.1"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+          Expand-Archive -LiteralPath $archive -DestinationPath $root -Force
+          $dir = Get-ChildItem -LiteralPath $root -Directory | Select-Object -First 1
+          if (-not $dir) {
+            throw "FFmpeg archive did not contain a directory"
+          }
+          echo "FFMPEG_DIR=$($dir.FullName.Replace('\', '/'))" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Configure Windows environment
         if: runner.os == 'Windows'
@@ -85,11 +99,15 @@ jobs:
         run: |
           $msys2 = Join-Path $env:RUNNER_TEMP "setup-msys2\msys2.cmd"
           $mingw = (& $msys2 -c "cygpath -w /mingw64").Trim()
+          $bash = (& $msys2 -c "cygpath -w /usr/bin/bash.exe").Trim()
           $pkgConfigUnix = (& $msys2 -c "command -v pkgconf || command -v pkg-config").Trim()
           $pkgConfigPath = (& $msys2 -c "cygpath -w '$pkgConfigUnix'").Trim()
           $pkgConfig = $pkgConfigPath.Replace("\", "/")
-          $pkgConfigDir = (Join-Path $mingw "lib\pkgconfig").Replace("\", "/")
+          $pkgConfigDir = (Join-Path $env:FFMPEG_DIR "lib\pkgconfig").Replace("\", "/")
           echo "$mingw\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "$env:FFMPEG_DIR\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          echo "MINGW64_BIN=$($mingw.Replace('\', '/'))/bin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          echo "MSYS2_BASH=$bash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG_PATH=$pkgConfigDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG_ALLOW_CROSS=1" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           echo "PKG_CONFIG=$pkgConfig" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
@@ -106,9 +124,11 @@ jobs:
         shell: pwsh
         run: |
           Write-Host "PKG_CONFIG=$env:PKG_CONFIG"
+          Write-Host "FFMPEG_DIR=$env:FFMPEG_DIR"
           Test-Path -LiteralPath $env:PKG_CONFIG
           & $env:PKG_CONFIG --version
           & $env:PKG_CONFIG --libs --cflags libavutil
+          Test-Path -LiteralPath (Join-Path $env:FFMPEG_DIR "include/libavcodec/avfft.h")
 
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
@@ -119,8 +139,10 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item -LiteralPath "target/${{ matrix.target }}/release/${{ matrix.binary }}" -Destination "dist/${{ matrix.binary }}"
           if ("${{ runner.os }}" -eq "Windows") {
+            Copy-Item -LiteralPath "$env:FFMPEG_DIR/bin/*.dll" -Destination dist -Force
+            Copy-Item -LiteralPath "$env:FFMPEG_DIR/LICENSE.txt" -Destination "dist/FFmpeg-LICENSE.txt" -Force
             $exe = Resolve-Path -LiteralPath "dist/${{ matrix.binary }}"
-            $bashExe = "C:\msys64\usr\bin\bash.exe"
+            $bashExe = $env:MSYS2_BASH
             $cygExe = & $bashExe -lc "cygpath -u '$($exe.Path)'"
             $dlls = & $bashExe -lc "ldd '$cygExe' | awk '/mingw64/ { print `$3 }'"
             foreach ($dll in $dlls) {
