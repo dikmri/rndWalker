@@ -139,7 +139,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item -LiteralPath "target/${{ matrix.target }}/release/${{ matrix.binary }}" -Destination "dist/${{ matrix.binary }}"
           if ("${{ runner.os }}" -eq "Windows") {
-            Copy-Item -LiteralPath "$env:FFMPEG_DIR/bin/*.dll" -Destination dist -Force
+            Copy-Item -Path "$env:FFMPEG_DIR/bin/*.dll" -Destination dist -Force
             Copy-Item -LiteralPath "$env:FFMPEG_DIR/LICENSE.txt" -Destination "dist/FFmpeg-LICENSE.txt" -Force
             $exe = Resolve-Path -LiteralPath "dist/${{ matrix.binary }}"
             $bashExe = $env:MSYS2_BASH
