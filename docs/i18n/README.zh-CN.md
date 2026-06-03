@@ -14,6 +14,36 @@
 - 使用 GitHub Releases 在启动时自动检查更新
 - 适用于 Windows、macOS 和 Linux 的自动发布
 
+## 安装
+
+自动检测GitHub Release的最新版本并将其安装在用户区。
+
+### 视窗
+
+在 PowerShell 中运行以下命令：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.ps1 | iex"
+```
+
+默认安装位置是“%LOCALAPPDATA%\Programs\rndWalker”。创建开始菜单快捷方式并将安装位置添加到用户的 PATH 中。
+
+### macOS/Linux
+
+在终端中运行以下命令：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.sh | sh
+```
+
+默认安装位置是“~/.local/share/rndWalker”。在 `~/.local/bin/rndWalker` 中创建启动链接。 macOS 自动检测 Intel / Apple Silicon，Linux 支持 x86_64。
+
+如果 Homebrew 可用，macOS 会自动检查 FFmpeg。在 Linux 上，如果“apt-get”、“dnf”或“pacman”可用，请安装 FFmpeg 和 SDL2 运行时。在 Linux 上，您可能需要输入“sudo”密码。如果您想避免自动部署依赖项，请运行：
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.sh | env RNDWALKER_SKIP_DEPS=1 sh
+```
+
 ## 键盘操作
 
 | 钥匙 | 手术 |
