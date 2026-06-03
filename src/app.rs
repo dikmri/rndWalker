@@ -280,6 +280,7 @@ impl RndWalkerApp {
         } else {
             self.play_next_video(ctx, true);
         }
+        ctx.request_repaint();
     }
 
     fn previous_video(&mut self, ctx: &Context) {
@@ -499,16 +500,19 @@ impl RndWalkerApp {
                 if let Some(player) = self.player.as_mut() {
                     let target = fit_rect(rect, player.size);
                     player.render_frame_at(ui, target);
+                    let state_before_process = player.player_state.get();
                     player.process_state();
+                    let state_after_process = player.player_state.get();
 
                     let elapsed_ms = player.elapsed_ms();
                     let remaining_ms = player.duration_ms.saturating_sub(elapsed_ms);
                     should_preload =
                         player.duration_ms > 0 && remaining_ms <= VIDEO_PRELOAD_BEFORE_END_MS;
-                    finished = matches!(player.player_state.get(), PlayerState::EndOfFile)
-                        || (matches!(player.player_state.get(), PlayerState::Stopped)
-                            && player.duration_ms > 0
-                            && elapsed_ms + VIDEO_FINISH_GRACE_MS >= player.duration_ms)
+                    let playback_started = player.duration_ms > 0 && elapsed_ms > 0;
+                    finished = matches!(state_before_process, PlayerState::EndOfFile)
+                        || matches!(state_after_process, PlayerState::EndOfFile)
+                        || (matches!(state_after_process, PlayerState::Stopped)
+                            && playback_started)
                         || (self.queued_video.is_some()
                             && player.duration_ms > 0
                             && remaining_ms <= VIDEO_FINISH_GRACE_MS);
@@ -843,9 +847,9 @@ fn settings_button(ui: &mut egui::Ui) -> egui::Response {
     let size = Vec2::new(72.0, 34.0);
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
     let hovered = response.hovered();
-    let fill_alpha = if hovered { 230 } else { 64 };
-    let stroke_alpha = if hovered { 220 } else { 90 };
-    let text_alpha = if hovered { 255 } else { 150 };
+    let fill_alpha = if hovered { 230 } else { 26 };
+    let stroke_alpha = if hovered { 220 } else { 45 };
+    let text_alpha = if hovered { 255 } else { 105 };
 
     ui.painter().rect(
         rect,
