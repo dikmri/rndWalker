@@ -14,7 +14,9 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 const JAPANESE_FONT_NAME: &str = "ZenKakuGothicNew";
-const VIDEO_PRELOAD_BEFORE_END_MS: i64 = 900;
+const VIDEO_PRELOAD_BEFORE_END_MS: i64 = 2_500;
+const VIDEO_PRELOAD_WARMUP_MS: i64 = 140;
+const VIDEO_PRELOAD_WARMUP_TIMEOUT_MS: u64 = 700;
 const VIDEO_FINISH_GRACE_MS: i64 = 30;
 
 pub struct RndWalkerApp {
@@ -58,6 +60,15 @@ struct PreparedVideo {
     player: Player,
     audio_device: Option<AudioDevice>,
     warning: Option<String>,
+    preload_state: PreloadState,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PreloadState {
+    Cold,
+    Warming { started_at: Instant },
+    SeekingToStart,
+    Ready,
 }
 
 impl RndWalkerApp {
@@ -181,7 +192,9 @@ impl RndWalkerApp {
     }
 
     fn clear_queued_video(&mut self) {
-        self.queued_video = None;
+        if let Some(mut queued_video) = self.queued_video.take() {
+            queued_video.player.stop();
+        }
         self.queued_video_folder = None;
     }
 
@@ -212,6 +225,7 @@ impl RndWalkerApp {
             player,
             audio_device,
             warning,
+            preload_state: PreloadState::Cold,
         })
     }
 
@@ -223,9 +237,19 @@ impl RndWalkerApp {
             mut player,
             audio_device,
             warning,
+            preload_state,
         } = prepared;
 
-        player.start();
+        player.options.set_audio_volume(self.effective_volume());
+        match preload_state {
+            PreloadState::Ready => player.resume(),
+            PreloadState::Warming { .. } if player.elapsed_ms() <= VIDEO_PRELOAD_WARMUP_MS * 2 => {
+                player.resume();
+            }
+            PreloadState::Cold | PreloadState::Warming { .. } | PreloadState::SeekingToStart => {
+                player.start();
+            }
+        }
         self.current_video = Some(path.clone());
         self.video_audio_device = audio_device;
         self.player = Some(player);
@@ -259,8 +283,49 @@ impl RndWalkerApp {
         };
 
         if let Ok(prepared) = self.prepare_video(ctx, path) {
+            let mut prepared = prepared;
+            self.start_queued_video_warmup(&mut prepared);
             self.queued_video = Some(prepared);
             self.queued_video_folder = target_folder;
+            ctx.request_repaint();
+        }
+    }
+
+    fn start_queued_video_warmup(&self, prepared: &mut PreparedVideo) {
+        prepared.player.options.set_audio_volume(0.0);
+        prepared.player.start();
+        prepared.preload_state = PreloadState::Warming {
+            started_at: Instant::now(),
+        };
+    }
+
+    fn service_queued_video(&mut self) {
+        let Some(prepared) = self.queued_video.as_mut() else {
+            return;
+        };
+
+        prepared.player.options.set_audio_volume(0.0);
+        prepared.player.process_state();
+
+        match prepared.preload_state {
+            PreloadState::Cold => {}
+            PreloadState::Warming { started_at } => {
+                let warmed_by_frame = prepared.player.elapsed_ms() >= VIDEO_PRELOAD_WARMUP_MS;
+                let timed_out =
+                    started_at.elapsed() >= Duration::from_millis(VIDEO_PRELOAD_WARMUP_TIMEOUT_MS);
+
+                if warmed_by_frame || timed_out {
+                    prepared.player.pause();
+                    prepared.player.seek(0.0);
+                    prepared.preload_state = PreloadState::SeekingToStart;
+                }
+            }
+            PreloadState::SeekingToStart => {
+                if matches!(prepared.player.player_state.get(), PlayerState::Paused) {
+                    prepared.preload_state = PreloadState::Ready;
+                }
+            }
+            PreloadState::Ready => {}
         }
     }
 
@@ -377,6 +442,9 @@ impl RndWalkerApp {
         let volume = self.effective_volume();
         if let Some(player) = self.player.as_mut() {
             player.options.set_audio_volume(volume);
+        }
+        if let Some(prepared) = self.queued_video.as_mut() {
+            prepared.player.options.set_audio_volume(0.0);
         }
         if let Some(player) = self.mp3_player.as_ref() {
             player.set_volume(volume);
@@ -532,6 +600,7 @@ impl RndWalkerApp {
                 if should_preload {
                     self.ensure_next_video_preloaded(ctx);
                 }
+                self.service_queued_video();
 
                 if finished {
                     self.advance_after_video_finished(ctx);
