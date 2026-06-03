@@ -1,0 +1,41 @@
+name: Docs i18n
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "docs/**/*.md"
+      - "scripts/translate_markdown.py"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  translate:
+    if: github.event_name == 'workflow_dispatch' || !contains(github.event.head_commit.message, '[skip i18n]')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Generate translations
+        run: |
+          python scripts/translate_markdown.py files README.md docs/i18n
+          python scripts/translate_markdown.py files docs/簡易ユーザマニュアル.md docs/i18n
+
+      - name: Commit generated translations
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/i18n
+          if git diff --cached --quiet; then
+            echo "No translation changes"
+          else
+            git commit -m "Update generated document translations [skip i18n]"
+            git push
+          fi

@@ -1,45 +1,54 @@
 # rndWalker
 
-`rndWalker` is a Rust + eframe port of the original Electron random video/audio player.
+`rndWalker` は、ローカルフォルダ内の動画と音楽をランダムに再生する Rust + eframe 製のデスクトップアプリです。
 
-## Features
+旧 Electron 版は `legacy/electron/` に退避してあり、今後の開発は Rust 版を基準に進めます。
 
-- Random MP4 playback from up to 3 folder groups.
-- Each MP4 group supports up to 4 folders.
-- Independent random MP3 playback.
-- Folder presets, local JSON settings, volume and mute controls.
-- Startup self-update from GitHub Releases in release builds.
-- Cross-platform release workflow for Windows, macOS, and Linux.
+## 主な機能
 
-## Keyboard
+- MP4 動画をランダム再生
+- 最大 3 グループの MP4 フォルダ管理
+- 各 MP4 グループに最大 4 つのフォルダを登録可能
+- MP3 音声の独立ランダム再生
+- フォルダプリセット、音量、ミュート、設定保存
+- GitHub Releases を使った起動時の自動更新チェック
+- Windows、macOS、Linux 向けの自動リリース
 
-| Key | Action |
+## キーボード操作
+
+| キー | 動作 |
 | --- | --- |
-| F5 | Reload video folders |
-| F11 | Toggle fullscreen |
-| Esc | Exit fullscreen or close settings |
-| M | Toggle mute |
-| W / S | Volume up / down |
-| D / A | Next random video / previous video |
-| Left / Up / Right | Switch to folder group 1 / 2 / 3 after current video |
-| Down | Return to all folders after current video |
+| F5 | 動画フォルダを再読み込み |
+| F11 | フルスクリーン切替 |
+| Esc | フルスクリーン解除、または設定画面を閉じる |
+| M | ミュート切替 |
+| W / S | 音量アップ / 音量ダウン |
+| D / A | 次のランダム動画 / 前の動画 |
+| 左 / 上 / 右 | 現在の動画終了後にフォルダグループ 1 / 2 / 3 へ切替 |
+| 下 | 現在の動画終了後に全フォルダへ戻す |
 
-## Build
+## ビルド
 
-`egui-video` uses FFmpeg. Install FFmpeg 7 development libraries and `pkg-config` before building.
+`egui-video` が FFmpeg を使うため、開発環境には FFmpeg 7 の開発ライブラリと `pkg-config` が必要です。
 
 ```powershell
 cargo build --release
 ```
 
-The app stores settings in the platform config directory under `rndWalker/settings.json`.
+設定は OS 標準の設定ディレクトリに `rndWalker/settings.json` として保存されます。
 
-## Releases And Updates
+## リリースと更新
 
-Pushing a tag such as `v0.1.0` runs `.github/workflows/release.yml` and uploads ZIP assets for supported targets.
+`v0.1.12` のようなタグを push すると `.github/workflows/release.yml` が実行され、対応プラットフォーム向けの ZIP が GitHub Releases にアップロードされます。
 
-Release builds check `dikmri/rndWalker` on startup. If a newer compatible release is available, the executable is downloaded and replaced in place. Restart the app after the update notice appears.
+リリース版は起動時に `dikmri/rndWalker` の GitHub Releases を確認します。更新がある場合は実行ファイルを置き換え、完了後に再起動を促します。
 
-## Legacy Electron Version
+## 多言語ドキュメント
 
-The previous JavaScript/Electron implementation is preserved under `legacy/electron/` for reference only. New development should target the Rust codebase.
+README やリリースノートの正本は日本語で管理します。`main` ブランチで日本語ドキュメントが更新されると、`.github/workflows/docs-i18n.yml` が翻訳を生成して `docs/i18n/` に反映します。
+
+- 英語: `docs/i18n/README.en.md`
+- 中国語: `docs/i18n/README.zh-CN.md`
+- 韓国語: `docs/i18n/README.ko.md`
+
+翻訳は自動生成のため、正確性が必要な修正は日本語の正本へ反映してください。

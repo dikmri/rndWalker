@@ -2,8 +2,9 @@ use crate::config::{AppSettings, FolderPreset, MAX_SUB_FOLDERS, NUM_GROUPS};
 use crate::media::{choose_random_path, MediaLibrary};
 use crate::updater::{self, UpdateMessage};
 use eframe::egui::{
-    self, Align, Align2, Area, CentralPanel, Color32, ComboBox, Context, Frame, Id, Key, Layout,
-    Margin, Rect, RichText, ScrollArea, TextEdit, Vec2, ViewportCommand, Window,
+    self, Align, Align2, Area, CentralPanel, Color32, ComboBox, Context, FontData, FontDefinitions,
+    FontFamily, FontId, Frame, Id, Key, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke,
+    TextEdit, Vec2, ViewportCommand, Window,
 };
 use egui_video::{AudioDevice, Player, PlayerState};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink};
@@ -12,11 +13,17 @@ use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
+const JAPANESE_FONT_NAME: &str = "ZenKakuGothicNew";
+const VIDEO_PRELOAD_BEFORE_END_MS: i64 = 900;
+const VIDEO_FINISH_GRACE_MS: i64 = 30;
+
 pub struct RndWalkerApp {
     settings: AppSettings,
     library: MediaLibrary,
     player: Option<Player>,
     video_audio_device: Option<AudioDevice>,
+    queued_video: Option<PreparedVideo>,
+    queued_video_folder: Option<usize>,
     current_video: Option<PathBuf>,
     history: Vec<PathBuf>,
     history_index: Option<usize>,
@@ -46,8 +53,17 @@ struct TimedMessage {
     until: Instant,
 }
 
+struct PreparedVideo {
+    path: PathBuf,
+    player: Player,
+    audio_device: Option<AudioDevice>,
+    warning: Option<String>,
+}
+
 impl RndWalkerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        install_japanese_font(&cc.egui_ctx);
+
         let mut settings = AppSettings::load().unwrap_or_default();
         settings.normalize();
 
@@ -63,6 +79,8 @@ impl RndWalkerApp {
             library,
             player: None,
             video_audio_device: None,
+            queued_video: None,
+            queued_video_folder: None,
             current_video: None,
             history: Vec::new(),
             history_index: None,
@@ -111,6 +129,7 @@ impl RndWalkerApp {
         self.library = MediaLibrary::from_settings(&self.settings);
         self.active_folder = None;
         self.pending_folder = None;
+        self.clear_queued_video();
         self.history.clear();
         self.history_index = None;
 
@@ -134,6 +153,7 @@ impl RndWalkerApp {
     }
 
     fn play_next_video(&mut self, ctx: &Context, add_to_history: bool) {
+        self.clear_queued_video();
         let videos = self.library.active_videos(self.active_folder);
         let Some(path) = choose_random_path(&videos) else {
             self.show_info("再生できるMP4ファイルがありません");
@@ -144,41 +164,10 @@ impl RndWalkerApp {
     }
 
     fn load_video(&mut self, ctx: &Context, path: PathBuf, add_to_history: bool) {
-        self.stop_video();
-
-        let input_path = path.to_string_lossy().to_string();
-        match Player::new(ctx, &input_path) {
-            Ok(mut player) => {
-                player.options.looping = false;
-                player.options.set_audio_volume(self.effective_volume());
-
-                match AudioDevice::new() {
-                    Ok(mut audio_device) => {
-                        if let Err(error) = player.add_audio(&mut audio_device) {
-                            self.show_info(format!("動画音声を初期化できません: {error}"));
-                        }
-                        self.video_audio_device = Some(audio_device);
-                    }
-                    Err(error) => {
-                        self.show_info(format!("動画音声デバイスを初期化できません: {error}"))
-                    }
-                }
-
-                player.start();
-                self.current_video = Some(path.clone());
-                self.player = Some(player);
-
-                if add_to_history {
-                    if let Some(index) = self.history_index {
-                        self.history.truncate(index + 1);
-                    }
-                    self.history.push(path);
-                    self.history_index = self.history.len().checked_sub(1);
-                }
-            }
-            Err(error) => {
-                self.show_info(format!("動画を読み込めません: {error}"));
-            }
+        self.clear_queued_video();
+        match self.prepare_video(ctx, path) {
+            Ok(prepared) => self.start_prepared_video(prepared, add_to_history),
+            Err(error) => self.show_info(format!("動画を読み込めません: {error}")),
         }
     }
 
@@ -189,6 +178,108 @@ impl RndWalkerApp {
         self.player = None;
         self.video_audio_device = None;
         self.current_video = None;
+    }
+
+    fn clear_queued_video(&mut self) {
+        self.queued_video = None;
+        self.queued_video_folder = None;
+    }
+
+    fn prepare_video(&self, ctx: &Context, path: PathBuf) -> Result<PreparedVideo, String> {
+        let input_path = path.to_string_lossy().to_string();
+        let mut player = Player::new(ctx, &input_path).map_err(|error| error.to_string())?;
+        player.options.looping = false;
+        player.options.set_audio_volume(self.effective_volume());
+
+        let mut warning = None;
+        let audio_device = match AudioDevice::new() {
+            Ok(mut audio_device) => {
+                if let Err(error) = player.add_audio(&mut audio_device) {
+                    warning = Some(format!("動画音声を初期化できません: {error}"));
+                    None
+                } else {
+                    Some(audio_device)
+                }
+            }
+            Err(error) => {
+                warning = Some(format!("動画音声デバイスを初期化できません: {error}"));
+                None
+            }
+        };
+
+        Ok(PreparedVideo {
+            path,
+            player,
+            audio_device,
+            warning,
+        })
+    }
+
+    fn start_prepared_video(&mut self, prepared: PreparedVideo, add_to_history: bool) {
+        self.stop_video();
+
+        let PreparedVideo {
+            path,
+            mut player,
+            audio_device,
+            warning,
+        } = prepared;
+
+        player.start();
+        self.current_video = Some(path.clone());
+        self.video_audio_device = audio_device;
+        self.player = Some(player);
+
+        if add_to_history {
+            if let Some(index) = self.history_index {
+                self.history.truncate(index + 1);
+            }
+            self.history.push(path);
+            self.history_index = self.history.len().checked_sub(1);
+        }
+
+        if let Some(warning) = warning {
+            self.show_info(warning);
+        }
+    }
+
+    fn target_folder_for_next_video(&self) -> Option<usize> {
+        self.pending_folder.unwrap_or(self.active_folder)
+    }
+
+    fn ensure_next_video_preloaded(&mut self, ctx: &Context) {
+        if self.queued_video.is_some() {
+            return;
+        }
+
+        let target_folder = self.target_folder_for_next_video();
+        let videos = self.library.active_videos(target_folder);
+        let Some(path) = choose_random_path(&videos) else {
+            return;
+        };
+
+        if let Ok(prepared) = self.prepare_video(ctx, path) {
+            self.queued_video = Some(prepared);
+            self.queued_video_folder = target_folder;
+        }
+    }
+
+    fn advance_after_video_finished(&mut self, ctx: &Context) {
+        self.apply_pending_folder_switch();
+
+        let prepared = if self.queued_video_folder == self.active_folder {
+            self.queued_video.take()
+        } else {
+            self.clear_queued_video();
+            None
+        };
+
+        self.queued_video_folder = None;
+        if let Some(prepared) = prepared {
+            self.start_prepared_video(prepared, true);
+        } else {
+            self.play_next_video(ctx, true);
+        }
     }
 
     fn previous_video(&mut self, ctx: &Context) {
@@ -252,13 +343,14 @@ impl RndWalkerApp {
         }
 
         self.pending_folder = Some(folder);
-        self.show_indicator(format!("Next: {}", folder_label(folder)));
+        self.clear_queued_video();
+        self.show_indicator(format!("次から: {}", folder_label(folder)));
     }
 
     fn apply_pending_folder_switch(&mut self) {
         if let Some(folder) = self.pending_folder.take() {
             self.active_folder = folder;
-            self.show_info(format!("Now playing: {}", folder_label(folder)));
+            self.show_info(format!("再生対象: {}", folder_label(folder)));
         }
     }
 
@@ -267,16 +359,16 @@ impl RndWalkerApp {
         self.settings.volume = self.volume;
         let _ = self.settings.save();
         self.apply_volume();
-        self.show_indicator(format!("Volume {}%", (self.volume * 100.0).round() as u32));
+        self.show_indicator(format!("音量 {}%", (self.volume * 100.0).round() as u32));
     }
 
     fn toggle_mute(&mut self) {
         self.muted = !self.muted;
         self.apply_volume();
         if self.muted {
-            self.show_indicator("Muted");
+            self.show_indicator("ミュート");
         } else {
-            self.show_indicator(format!("Volume {}%", (self.volume * 100.0).round() as u32));
+            self.show_indicator(format!("音量 {}%", (self.volume * 100.0).round() as u32));
         }
     }
 
@@ -403,21 +495,29 @@ impl RndWalkerApp {
             .show(ctx, |ui| {
                 let rect = ui.max_rect();
                 let mut finished = false;
+                let mut should_preload = false;
                 if let Some(player) = self.player.as_mut() {
                     let target = fit_rect(rect, player.size);
                     player.render_frame_at(ui, target);
                     player.process_state();
 
+                    let elapsed_ms = player.elapsed_ms();
+                    let remaining_ms = player.duration_ms.saturating_sub(elapsed_ms);
+                    should_preload =
+                        player.duration_ms > 0 && remaining_ms <= VIDEO_PRELOAD_BEFORE_END_MS;
                     finished = matches!(player.player_state.get(), PlayerState::EndOfFile)
                         || (matches!(player.player_state.get(), PlayerState::Stopped)
                             && player.duration_ms > 0
-                            && player.elapsed_ms() + 250 >= player.duration_ms);
+                            && elapsed_ms + VIDEO_FINISH_GRACE_MS >= player.duration_ms)
+                        || (self.queued_video.is_some()
+                            && player.duration_ms > 0
+                            && remaining_ms <= VIDEO_FINISH_GRACE_MS);
                 } else {
                     ui.with_layout(
                         Layout::centered_and_justified(egui::Direction::TopDown),
                         |ui| {
                             ui.label(
-                                RichText::new("No video loaded")
+                                RichText::new("動画が読み込まれていません")
                                     .color(Color32::from_gray(180))
                                     .size(22.0),
                             );
@@ -425,9 +525,12 @@ impl RndWalkerApp {
                     );
                 }
 
+                if should_preload {
+                    self.ensure_next_video_preloaded(ctx);
+                }
+
                 if finished {
-                    self.apply_pending_folder_switch();
-                    self.play_next_video(ctx, true);
+                    self.advance_after_video_finished(ctx);
                 }
             });
     }
@@ -462,34 +565,11 @@ impl RndWalkerApp {
         }
 
         Area::new(Id::new("settings_button"))
-            .anchor(Align2::RIGHT_TOP, [-12.0, 12.0])
+            .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])
             .show(ctx, |ui| {
-                if ui.button("Settings").clicked() {
+                if settings_button(ui).clicked() {
                     self.open_settings();
                 }
-            });
-
-        Area::new(Id::new("status"))
-            .anchor(Align2::LEFT_TOP, [12.0, 12.0])
-            .show(ctx, |ui| {
-                let count = self.library.active_video_count(self.active_folder);
-                let update = match &self.update_message {
-                    UpdateMessage::Checking => "checking updates",
-                    UpdateMessage::Skipped(_) => "dev build",
-                    UpdateMessage::UpToDate(_) => "up to date",
-                    UpdateMessage::Updated(_) => "updated",
-                    UpdateMessage::Failed(_) => "update check failed",
-                };
-                overlay_frame().show(ui, |ui| {
-                    ui.label(
-                        RichText::new(format!(
-                            "{} | {count} videos | {update}",
-                            folder_label(self.active_folder)
-                        ))
-                        .color(Color32::WHITE)
-                        .size(13.0),
-                    );
-                });
             });
     }
 
@@ -509,7 +589,7 @@ impl RndWalkerApp {
 
         let mut open = self.show_settings;
         let mut save_clicked = false;
-        Window::new("rndWalker Settings")
+        Window::new("rndWalker 設定")
             .open(&mut open)
             .collapsible(false)
             .resizable(true)
@@ -517,8 +597,8 @@ impl RndWalkerApp {
             .show(ctx, |ui| {
                 ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
                     for group in 0..NUM_GROUPS {
-                        ui.heading(format!("MP4 Folder {}", group + 1));
-                        if group > 0 && ui.button("Clear group").clicked() {
+                        ui.heading(format!("MP4フォルダ {}", group + 1));
+                        if group > 0 && ui.button("このグループをクリア").clicked() {
                             for sub in 0..MAX_SUB_FOLDERS {
                                 self.folder_inputs[group][sub].clear();
                                 self.visible_sub_folders[group][sub] = sub == 0;
@@ -531,9 +611,9 @@ impl RndWalkerApp {
                             }
                             ui.horizontal(|ui| {
                                 let label = if sub == 0 {
-                                    "Base".to_owned()
+                                    "基本".to_owned()
                                 } else {
-                                    format!("Sub {}", sub + 1)
+                                    format!("追加 {}", sub + 1)
                                 };
                                 ui.label(label);
                                 ui.add_sized(
@@ -541,7 +621,7 @@ impl RndWalkerApp {
                                     TextEdit::singleline(&mut self.folder_inputs[group][sub])
                                         .interactive(false),
                                 );
-                                if ui.button("Browse").clicked() {
+                                if ui.button("参照").clicked() {
                                     if let Some(path) = pick_folder() {
                                         self.folder_inputs[group][sub] = path;
                                     }
@@ -553,7 +633,7 @@ impl RndWalkerApp {
                             });
                         }
 
-                        if ui.button("+ Add sub folder").clicked() {
+                        if ui.button("+ 追加フォルダ").clicked() {
                             if let Some(slot) = (1..MAX_SUB_FOLDERS)
                                 .find(|slot| !self.visible_sub_folders[group][*slot])
                             {
@@ -563,13 +643,13 @@ impl RndWalkerApp {
                         ui.separator();
                     }
 
-                    ui.heading("MP3 Folder");
+                    ui.heading("MP3フォルダ");
                     ui.horizontal(|ui| {
                         ui.add_sized(
                             [520.0, 22.0],
                             TextEdit::singleline(&mut self.mp3_input).interactive(false),
                         );
-                        if ui.button("Browse").clicked() {
+                        if ui.button("参照").clicked() {
                             if let Some(path) = pick_folder() {
                                 self.mp3_input = path;
                             }
@@ -582,10 +662,10 @@ impl RndWalkerApp {
 
                 ui.separator();
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Cancel").clicked() {
+                    if ui.button("キャンセル").clicked() {
                         self.show_settings = false;
                     }
-                    if ui.button("Save").clicked() {
+                    if ui.button("保存").clicked() {
                         save_clicked = true;
                     }
                 });
@@ -599,11 +679,11 @@ impl RndWalkerApp {
     }
 
     fn draw_presets(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Presets");
+        ui.heading("プリセット");
         ui.horizontal(|ui| {
             ComboBox::from_id_salt("preset_select")
                 .selected_text(if self.selected_preset.is_empty() {
-                    "-- Select Preset --"
+                    "-- プリセットを選択 --"
                 } else {
                     &self.selected_preset
                 })
@@ -614,10 +694,10 @@ impl RndWalkerApp {
                     }
                 });
 
-            if ui.button("Load").clicked() {
+            if ui.button("読込").clicked() {
                 self.load_selected_preset();
             }
-            if ui.button("Delete").clicked() {
+            if ui.button("削除").clicked() {
                 self.delete_selected_preset();
             }
         });
@@ -625,9 +705,9 @@ impl RndWalkerApp {
         ui.horizontal(|ui| {
             ui.add_sized(
                 [320.0, 22.0],
-                TextEdit::singleline(&mut self.preset_name_input).hint_text("Preset name"),
+                TextEdit::singleline(&mut self.preset_name_input).hint_text("プリセット名"),
             );
-            if ui.button("Save as Preset").clicked() {
+            if ui.button("プリセットとして保存").clicked() {
                 self.save_current_as_preset();
             }
         });
@@ -739,10 +819,55 @@ fn pick_folder() -> Option<String> {
         .map(|path| path.to_string_lossy().to_string())
 }
 
+fn install_japanese_font(ctx: &Context) {
+    let mut fonts = FontDefinitions::default();
+    fonts.font_data.insert(
+        JAPANESE_FONT_NAME.to_owned(),
+        FontData::from_static(include_bytes!(
+            "../assets/fonts/ZenKakuGothicNew-Regular.ttf"
+        )),
+    );
+
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts
+            .families
+            .entry(family)
+            .or_default()
+            .insert(0, JAPANESE_FONT_NAME.to_owned());
+    }
+
+    ctx.set_fonts(fonts);
+}
+
+fn settings_button(ui: &mut egui::Ui) -> egui::Response {
+    let size = Vec2::new(72.0, 34.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let hovered = response.hovered();
+    let fill_alpha = if hovered { 230 } else { 64 };
+    let stroke_alpha = if hovered { 220 } else { 90 };
+    let text_alpha = if hovered { 255 } else { 150 };
+
+    ui.painter().rect(
+        rect,
+        egui::Rounding::same(17.0),
+        Color32::from_black_alpha(fill_alpha),
+        Stroke::new(1.0, Color32::from_white_alpha(stroke_alpha)),
+    );
+    ui.painter().text(
+        rect.center(),
+        Align2::CENTER_CENTER,
+        "設定",
+        FontId::proportional(15.0),
+        Color32::from_white_alpha(text_alpha),
+    );
+
+    response.on_hover_text("設定を開く")
+}
+
 fn folder_label(folder: Option<usize>) -> String {
     match folder {
-        Some(index) => format!("Folder {}", index + 1),
-        None => "All Folders".to_owned(),
+        Some(index) => format!("フォルダ{}", index + 1),
+        None => "全フォルダ".to_owned(),
     }
 }
 
