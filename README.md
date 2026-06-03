@@ -14,6 +14,36 @@
 - GitHub Releases を使った起動時の自動更新チェック
 - Windows、macOS、Linux 向けの自動リリース
 
+## インストール
+
+最新版の GitHub Release を自動判定し、ユーザー領域にインストールします。
+
+### Windows
+
+PowerShell で次を実行してください。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.ps1 | iex"
+```
+
+既定のインストール先は `%LOCALAPPDATA%\Programs\rndWalker` です。スタートメニューのショートカットを作成し、ユーザー PATH にインストール先を追加します。
+
+### macOS / Linux
+
+ターミナルで次を実行してください。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.sh | sh
+```
+
+既定のインストール先は `~/.local/share/rndWalker` です。`~/.local/bin/rndWalker` に起動用リンクを作成します。macOS は Intel / Apple Silicon を自動判定し、Linux は x86_64 に対応しています。
+
+macOS では Homebrew が利用できる場合に FFmpeg を自動確認します。Linux では `apt-get`、`dnf`、`pacman` のいずれかが利用できる場合に FFmpeg と SDL2 のランタイムを導入します。Linux では `sudo` のパスワード入力が必要になる場合があります。依存関係の自動導入を避ける場合は、次のように実行してください。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/install.sh | env RNDWALKER_SKIP_DEPS=1 sh
+```
+
 ## キーボード操作
 
 | キー | 動作 |
