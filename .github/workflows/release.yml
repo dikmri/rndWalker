@@ -139,8 +139,15 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item -LiteralPath "target/${{ matrix.target }}/release/${{ matrix.binary }}" -Destination "dist/${{ matrix.binary }}"
           if ("${{ runner.os }}" -eq "Windows") {
+            $runtimeDlls = Get-ChildItem -Path "target/${{ matrix.target }}/release/*.dll" -File -ErrorAction SilentlyContinue
+            foreach ($dll in $runtimeDlls) {
+              Copy-Item -LiteralPath $dll.FullName -Destination dist -Force
+            }
             Copy-Item -Path "$env:FFMPEG_DIR/bin/*.dll" -Destination dist -Force
             Copy-Item -LiteralPath "$env:FFMPEG_DIR/LICENSE.txt" -Destination "dist/FFmpeg-LICENSE.txt" -Force
+            if (-not (Test-Path -LiteralPath "dist/SDL2.dll")) {
+              throw "SDL2.dll is missing from the Windows release archive"
+            }
             $exe = Resolve-Path -LiteralPath "dist/${{ matrix.binary }}"
             $bashExe = $env:MSYS2_BASH
             $cygExe = & $bashExe -lc "cygpath -u '$($exe.Path)'"
