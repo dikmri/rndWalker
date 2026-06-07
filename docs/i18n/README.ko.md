@@ -12,7 +12,7 @@
 - MP3 오디오 독립 랜덤 재생
 - 폴더 프리셋, 볼륨, 음소거, 설정 저장
 - GitHub Releases를 사용하여 시작 시 자동 업데이트 확인
-- Windows, macOS 및 Linux용 자동 릴리스
+- Windows, macOS, Linux용 자동 릴리스
 
 ## 설치
 
@@ -65,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 cargo build --release
 ```
 
-설정은 OS 표준 설정 디렉토리에 `rndWalker/settings.json`으로 저장됩니다.
+설정은 OS 표준의 설정 디렉토리에 `rndWalker/settings.json` 로서 보존됩니다.
 
 ## 릴리스 및 업데이트
 
