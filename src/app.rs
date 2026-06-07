@@ -1,5 +1,5 @@
 use crate::config::{AppSettings, FolderPreset, MAX_SUB_FOLDERS, NUM_GROUPS};
-use crate::media::{choose_random_path, MediaLibrary};
+use crate::media::{choose_random_path, choose_random_path_avoiding_recent, MediaLibrary};
 use crate::updater::{self, UpdateMessage};
 use eframe::egui::{
     self, Align, Align2, Area, CentralPanel, Color32, ComboBox, Context, FontData, FontDefinitions,
@@ -18,6 +18,7 @@ const VIDEO_PRELOAD_BEFORE_END_MS: i64 = 2_500;
 const VIDEO_PRELOAD_WARMUP_MS: i64 = 140;
 const VIDEO_PRELOAD_WARMUP_TIMEOUT_MS: u64 = 700;
 const VIDEO_FINISH_GRACE_MS: i64 = 30;
+const RANDOM_RECENT_EXCLUSION_COUNT: usize = 3;
 
 pub struct RndWalkerApp {
     settings: AppSettings,
@@ -166,7 +167,7 @@ impl RndWalkerApp {
     fn play_next_video(&mut self, ctx: &Context, add_to_history: bool) {
         self.clear_queued_video();
         let videos = self.library.active_videos(self.active_folder);
-        let Some(path) = choose_random_path(&videos) else {
+        let Some(path) = self.choose_next_video_path(&videos) else {
             self.show_info("再生できるMP4ファイルがありません");
             return;
         };
@@ -271,6 +272,29 @@ impl RndWalkerApp {
         self.pending_folder.unwrap_or(self.active_folder)
     }
 
+    fn recent_video_paths(&self) -> Vec<PathBuf> {
+        let end = self
+            .history_index
+            .map(|index| index + 1)
+            .unwrap_or(self.history.len())
+            .min(self.history.len());
+
+        self.history[..end]
+            .iter()
+            .rev()
+            .take(RANDOM_RECENT_EXCLUSION_COUNT)
+            .cloned()
+            .collect()
+    }
+
+    fn choose_next_video_path(&self, videos: &[PathBuf]) -> Option<PathBuf> {
+        choose_random_path_avoiding_recent(
+            videos,
+            &self.recent_video_paths(),
+            RANDOM_RECENT_EXCLUSION_COUNT,
+        )
+    }
+
     fn ensure_next_video_preloaded(&mut self, ctx: &Context) {
         if self.queued_video.is_some() {
             return;
@@ -278,7 +302,7 @@ impl RndWalkerApp {
 
         let target_folder = self.target_folder_for_next_video();
         let videos = self.library.active_videos(target_folder);
-        let Some(path) = choose_random_path(&videos) else {
+        let Some(path) = self.choose_next_video_path(&videos) else {
             return;
         };
 

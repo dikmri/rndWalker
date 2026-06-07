@@ -2,6 +2,7 @@
 
 mod app;
 mod config;
+mod icon;
 mod media;
 mod updater;
 
@@ -11,7 +12,8 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([1280.0, 720.0])
-            .with_min_inner_size([800.0, 450.0]),
+            .with_min_inner_size([800.0, 450.0])
+            .with_icon(icon::app_icon()),
         ..Default::default()
     };
 

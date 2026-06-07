@@ -88,3 +88,64 @@ pub fn choose_random_path(paths: &[PathBuf]) -> Option<PathBuf> {
         Some(paths[fastrand::usize(..paths.len())].clone())
     }
 }
+
+pub fn choose_random_path_avoiding_recent(
+    paths: &[PathBuf],
+    recent_paths: &[PathBuf],
+    max_recent: usize,
+) -> Option<PathBuf> {
+    if paths.is_empty() {
+        return None;
+    }
+
+    let limit = recent_paths.len().min(max_recent);
+    for recent_count in (1..=limit).rev() {
+        let candidates: Vec<PathBuf> = paths
+            .iter()
+            .filter(|path| {
+                !recent_paths
+                    .iter()
+                    .take(recent_count)
+                    .any(|recent| recent == *path)
+            })
+            .cloned()
+            .collect();
+
+        if !candidates.is_empty() {
+            return choose_random_path(&candidates);
+        }
+    }
+
+    choose_random_path(paths)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn path(name: &str) -> PathBuf {
+        PathBuf::from(name)
+    }
+
+    #[test]
+    fn avoiding_recent_excludes_last_three_when_possible() {
+        let paths = vec![path("a.mp4"), path("b.mp4"), path("c.mp4"), path("d.mp4")];
+        let recent = vec![path("c.mp4"), path("b.mp4"), path("a.mp4")];
+
+        assert_eq!(
+            choose_random_path_avoiding_recent(&paths, &recent, 3),
+            Some(path("d.mp4"))
+        );
+    }
+
+    #[test]
+    fn avoiding_recent_relaxes_exclusion_for_small_libraries() {
+        let paths = vec![path("a.mp4"), path("b.mp4")];
+        let recent = vec![path("a.mp4"), path("b.mp4")];
+
+        assert_eq!(
+            choose_random_path_avoiding_recent(&paths, &recent, 3),
+            Some(path("b.mp4"))
+        );
+    }
+}
