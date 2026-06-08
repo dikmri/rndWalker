@@ -1,5 +1,9 @@
 # rndWalker
 
+<p align="center">
+<img src="assets/icons/rndwalker-128.png" alt="rndWalker icon" width="128" height="128">
+</p>
+
 `rndWalker` is a Rust + eframe desktop app that randomly plays videos and music in local folders.
 
 The old Electron version has been saved to `legacy/electron/`, and future development will proceed based on the Rust version.

@@ -1,5 +1,9 @@
 # 兰德沃克
 
+<p对齐=“中心”>
+<img src="assets/icons/rndwalker-128.png" alt="rndWalker 图标" width="128" height="128">
+</p>
+
 `rndWalker` 是一个 Rust + eframe 桌面应用程序，可以随机播放本地文件夹中的视频和音乐。
 
 旧的 Electron 版本已保存到 `legacy/electron/`，未来的开发将基于 Rust 版本进行。
