@@ -1,4 +1,7 @@
-use crate::config::{AppSettings, FolderPreset, MAX_SUB_FOLDERS, NUM_GROUPS};
+use crate::config::{
+    AppSettings, FolderPreset, MAX_MULTIVIEW_VIDEO_SIZE, MAX_SUB_FOLDERS, MIN_MULTIVIEW_VIDEO_SIZE,
+    NUM_GROUPS,
+};
 use crate::media::{choose_random_path, choose_random_path_avoiding_recent, MediaLibrary};
 use crate::updater::{self, UpdateMessage};
 use eframe::egui::{
@@ -19,6 +22,8 @@ const VIDEO_PRELOAD_WARMUP_MS: i64 = 140;
 const VIDEO_PRELOAD_WARMUP_TIMEOUT_MS: u64 = 700;
 const VIDEO_FINISH_GRACE_MS: i64 = 30;
 const RANDOM_RECENT_EXCLUSION_COUNT: usize = 3;
+const MULTIVIEW_MAX_TILES: usize = 64;
+const MULTIVIEW_RECENT_LIMIT: usize = 128;
 
 pub struct RndWalkerApp {
     settings: AppSettings,
@@ -28,6 +33,9 @@ pub struct RndWalkerApp {
     queued_video: Option<PreparedVideo>,
     queued_video_folder: Option<usize>,
     current_video: Option<PathBuf>,
+    multiview_tiles: Vec<MultiViewTile>,
+    multiview_layout: Option<MultiViewLayout>,
+    multiview_recent: Vec<PathBuf>,
     history: Vec<PathBuf>,
     history_index: Option<usize>,
     mp3_sink: Option<MixerDeviceSink>,
@@ -39,6 +47,8 @@ pub struct RndWalkerApp {
     folder_inputs: Vec<Vec<String>>,
     visible_sub_folders: Vec<Vec<bool>>,
     mp3_input: String,
+    multiview_enabled_input: bool,
+    multiview_video_size_input: f32,
     selected_preset: String,
     preset_name_input: String,
     volume: f32,
@@ -64,6 +74,23 @@ struct PreparedVideo {
     preload_state: PreloadState,
 }
 
+struct MultiViewTile {
+    path: PathBuf,
+    player: Player,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MultiViewLayout {
+    columns: usize,
+    rows: usize,
+}
+
+impl MultiViewLayout {
+    fn tile_count(self) -> usize {
+        self.columns * self.rows
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 enum PreloadState {
     Cold,
@@ -81,6 +108,8 @@ impl RndWalkerApp {
 
         let library = MediaLibrary::from_settings(&settings);
         let volume = settings.volume;
+        let multiview_enabled = settings.multiview_enabled;
+        let multiview_video_size = settings.multiview_video_size;
         let update_rx = updater::spawn_update_check();
 
         let mut app = Self {
@@ -94,6 +123,9 @@ impl RndWalkerApp {
             queued_video: None,
             queued_video_folder: None,
             current_video: None,
+            multiview_tiles: Vec::new(),
+            multiview_layout: None,
+            multiview_recent: Vec::new(),
             history: Vec::new(),
             history_index: None,
             mp3_sink: None,
@@ -104,6 +136,8 @@ impl RndWalkerApp {
             show_settings: false,
             selected_preset: String::new(),
             preset_name_input: String::new(),
+            multiview_enabled_input: multiview_enabled,
+            multiview_video_size_input: multiview_video_size,
             volume,
             muted: false,
             fullscreen: false,
@@ -142,11 +176,18 @@ impl RndWalkerApp {
         self.active_folder = None;
         self.pending_folder = None;
         self.clear_queued_video();
+        self.stop_multiview();
+        self.multiview_recent.clear();
         self.history.clear();
         self.history_index = None;
 
         if self.library.active_video_count(None) > 0 {
-            self.play_next_video(ctx, true);
+            if self.settings.multiview_enabled {
+                self.stop_video();
+                ctx.request_repaint();
+            } else {
+                self.play_next_video(ctx, true);
+            }
         } else {
             self.stop_video();
             self.show_info("MP4ファイルが見つかりません");
@@ -157,6 +198,8 @@ impl RndWalkerApp {
 
     fn reload_active_video_folder(&mut self) {
         self.library = MediaLibrary::from_settings(&self.settings);
+        self.clear_queued_video();
+        self.stop_multiview();
         let count = self.library.active_video_count(self.active_folder);
         self.show_info(format!(
             "{} を再読み込みしました: {count} videos",
@@ -389,6 +432,151 @@ impl RndWalkerApp {
         }
     }
 
+    fn prepare_multiview_player(&self, ctx: &Context, path: &PathBuf) -> Result<Player, String> {
+        let input_path = path.to_string_lossy().to_string();
+        let mut player = Player::new(ctx, &input_path).map_err(|error| error.to_string())?;
+        player.options.looping = false;
+        player.options.set_audio_volume(0.0);
+        player.start();
+        Ok(player)
+    }
+
+    fn stop_multiview(&mut self) {
+        for tile in &mut self.multiview_tiles {
+            tile.player.stop();
+        }
+        self.multiview_tiles.clear();
+        self.multiview_layout = None;
+    }
+
+    fn shuffle_multiview(&mut self, ctx: &Context) {
+        self.stop_multiview();
+        self.show_indicator("マルチビューを再シャッフル");
+        ctx.request_repaint();
+    }
+
+    fn choose_multiview_video_path(
+        &self,
+        videos: &[PathBuf],
+        occupied_paths: &[PathBuf],
+    ) -> Option<PathBuf> {
+        let mut avoided = occupied_paths.to_vec();
+        avoided.extend(
+            self.multiview_recent
+                .iter()
+                .rev()
+                .take(RANDOM_RECENT_EXCLUSION_COUNT)
+                .cloned(),
+        );
+        choose_random_path_avoiding_recent(videos, &avoided, avoided.len())
+    }
+
+    fn rebuild_multiview(&mut self, ctx: &Context, layout: MultiViewLayout) {
+        self.stop_multiview();
+        self.multiview_layout = Some(layout);
+
+        let videos = self.library.active_videos(self.active_folder);
+        if videos.is_empty() {
+            self.show_info("再生できるMP4ファイルがありません");
+            return;
+        }
+
+        let tile_count = layout.tile_count();
+        let mut selected_paths = Vec::with_capacity(tile_count);
+        for _ in 0..tile_count {
+            let Some(path) = self.choose_multiview_video_path(&videos, &selected_paths) else {
+                break;
+            };
+            selected_paths.push(path);
+        }
+
+        let mut failures = 0usize;
+        for path in selected_paths {
+            match self.prepare_multiview_player(ctx, &path) {
+                Ok(player) => self.multiview_tiles.push(MultiViewTile { path, player }),
+                Err(_) => {
+                    failures += 1;
+                    self.push_multiview_recent(path);
+                }
+            }
+        }
+
+        if failures > 0 {
+            self.show_info(format!("{failures}件の動画を読み込めませんでした"));
+        }
+        ctx.request_repaint();
+    }
+
+    fn replace_multiview_tile(&mut self, ctx: &Context, index: usize) {
+        let Some(old_path) = self
+            .multiview_tiles
+            .get(index)
+            .map(|tile| tile.path.clone())
+        else {
+            return;
+        };
+        self.push_multiview_recent(old_path);
+
+        let videos = self.library.active_videos(self.active_folder);
+        if videos.is_empty() {
+            return;
+        }
+
+        let max_attempts = videos.len().min(8).max(1);
+        let mut attempted_paths = Vec::new();
+        let mut last_error = None;
+
+        for _ in 0..max_attempts {
+            let mut occupied_paths: Vec<PathBuf> = self
+                .multiview_tiles
+                .iter()
+                .enumerate()
+                .filter(|(tile_index, _)| *tile_index != index)
+                .map(|(_, tile)| tile.path.clone())
+                .collect();
+            occupied_paths.extend(attempted_paths.iter().cloned());
+
+            let Some(path) = self.choose_multiview_video_path(&videos, &occupied_paths) else {
+                break;
+            };
+            attempted_paths.push(path.clone());
+
+            match self.prepare_multiview_player(ctx, &path) {
+                Ok(player) => {
+                    if let Some(tile) = self.multiview_tiles.get_mut(index) {
+                        tile.player.stop();
+                        *tile = MultiViewTile { path, player };
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
+                Err(error) => {
+                    last_error = Some(error);
+                    self.push_multiview_recent(path);
+                }
+            }
+        }
+
+        if let Some(tile) = self.multiview_tiles.get_mut(index) {
+            tile.player.seek(0.0);
+            tile.player.start();
+        }
+        if let Some(error) = last_error {
+            self.show_info(format!("次のマルチビュー動画を読み込めません: {error}"));
+        }
+    }
+
+    fn push_multiview_recent(&mut self, path: PathBuf) {
+        self.multiview_recent.push(path);
+        let overflow = self
+            .multiview_recent
+            .len()
+            .saturating_sub(MULTIVIEW_RECENT_LIMIT);
+        if overflow > 0 {
+            self.multiview_recent.drain(0..overflow);
+        }
+    }
+
     fn restart_random_audio(&mut self) {
         let Some(player) = self.mp3_player.as_ref() else {
             return;
@@ -432,6 +620,14 @@ impl RndWalkerApp {
             }
         }
 
+        if self.settings.multiview_enabled {
+            self.active_folder = folder;
+            self.pending_folder = None;
+            self.stop_multiview();
+            self.show_indicator(format!("再生対象: {}", folder_label(folder)));
+            return;
+        }
+
         self.pending_folder = Some(folder);
         self.clear_queued_video();
         self.show_indicator(format!("次から: {}", folder_label(folder)));
@@ -469,6 +665,9 @@ impl RndWalkerApp {
         }
         if let Some(prepared) = self.queued_video.as_mut() {
             prepared.player.options.set_audio_volume(0.0);
+        }
+        for tile in &mut self.multiview_tiles {
+            tile.player.options.set_audio_volume(0.0);
         }
         if let Some(player) = self.mp3_player.as_ref() {
             player.set_volume(volume);
@@ -563,10 +762,18 @@ impl RndWalkerApp {
             self.set_volume(self.volume - 0.05);
         }
         if ctx.input(|input| input.key_pressed(Key::D)) {
-            self.play_next_video(ctx, true);
+            if self.settings.multiview_enabled {
+                self.shuffle_multiview(ctx);
+            } else {
+                self.play_next_video(ctx, true);
+            }
         }
         if ctx.input(|input| input.key_pressed(Key::A)) {
-            self.previous_video(ctx);
+            if self.settings.multiview_enabled {
+                self.show_info("マルチビューでは前の動画へ戻れません");
+            } else {
+                self.previous_video(ctx);
+            }
         }
         if ctx.input(|input| input.key_pressed(Key::ArrowLeft)) {
             self.switch_folder(Some(0));
@@ -632,6 +839,64 @@ impl RndWalkerApp {
             });
     }
 
+    fn draw_multiview(&mut self, ctx: &Context) {
+        CentralPanel::default()
+            .frame(Frame::none().fill(Color32::BLACK))
+            .show(ctx, |ui| {
+                let rect = ui.max_rect();
+                let Some(layout) =
+                    multiview_layout_for_rect(rect, self.settings.multiview_video_size)
+                else {
+                    return;
+                };
+
+                if self.multiview_layout != Some(layout) {
+                    self.rebuild_multiview(ctx, layout);
+                }
+
+                if self.multiview_tiles.is_empty() {
+                    ui.with_layout(
+                        Layout::centered_and_justified(egui::Direction::TopDown),
+                        |ui| {
+                            ui.label(
+                                RichText::new("動画が読み込まれていません")
+                                    .color(Color32::from_gray(180))
+                                    .size(22.0),
+                            );
+                        },
+                    );
+                    return;
+                }
+
+                let cell_width = rect.width() / layout.columns as f32;
+                let cell_height = rect.height() / layout.rows as f32;
+                let mut finished_tiles = Vec::new();
+
+                for (index, tile) in self.multiview_tiles.iter_mut().enumerate() {
+                    let column = index % layout.columns;
+                    let row = index / layout.columns;
+                    let cell_rect = Rect::from_min_size(
+                        rect.min + Vec2::new(column as f32 * cell_width, row as f32 * cell_height),
+                        Vec2::new(cell_width, cell_height),
+                    );
+                    let target = fit_rect(cell_rect, tile.player.size);
+
+                    tile.player.render_frame_at(ui, target);
+                    let state_before_process = tile.player.player_state.get();
+                    tile.player.process_state();
+                    let state_after_process = tile.player.player_state.get();
+
+                    if video_finished(&tile.player, state_before_process, state_after_process) {
+                        finished_tiles.push(index);
+                    }
+                }
+
+                for index in finished_tiles {
+                    self.replace_multiview_tile(ctx, index);
+                }
+            });
+    }
+
     fn draw_overlays(&mut self, ctx: &Context) {
         if let Some(message) = &self.indicator {
             Area::new(Id::new("indicator"))
@@ -674,6 +939,8 @@ impl RndWalkerApp {
         self.folder_inputs = self.settings.mp4_folder_paths.clone();
         self.visible_sub_folders = visible_from_groups(&self.folder_inputs);
         self.mp3_input = self.settings.mp3_folder_path.clone();
+        self.multiview_enabled_input = self.settings.multiview_enabled;
+        self.multiview_video_size_input = self.settings.multiview_video_size;
         self.selected_preset.clear();
         self.preset_name_input.clear();
         self.show_settings = true;
@@ -752,6 +1019,21 @@ impl RndWalkerApp {
                             }
                         }
                     });
+
+                    ui.separator();
+                    ui.heading("マルチビュー");
+                    ui.checkbox(
+                        &mut self.multiview_enabled_input,
+                        "マルチビューを有効にする",
+                    );
+                    ui.add(
+                        egui::Slider::new(
+                            &mut self.multiview_video_size_input,
+                            MIN_MULTIVIEW_VIDEO_SIZE..=MAX_MULTIVIEW_VIDEO_SIZE,
+                        )
+                        .text("動画サイズ")
+                        .suffix(" px"),
+                    );
 
                     ui.separator();
                     self.draw_presets(ui);
@@ -876,6 +1158,8 @@ impl RndWalkerApp {
         self.settings.mp4_folder_paths = self.folder_inputs.clone();
         self.settings.mp3_folder_path = self.mp3_input.clone();
         self.settings.volume = self.volume;
+        self.settings.multiview_enabled = self.multiview_enabled_input;
+        self.settings.multiview_video_size = self.multiview_video_size_input;
         self.settings.normalize();
 
         if let Err(error) = self.settings.save() {
@@ -904,7 +1188,11 @@ impl eframe::App for RndWalkerApp {
             self.play_random_audio();
         }
 
-        self.draw_player(ctx);
+        if self.settings.multiview_enabled {
+            self.draw_multiview(ctx);
+        } else {
+            self.draw_player(ctx);
+        }
         self.draw_overlays(ctx);
         self.draw_settings(ctx);
     }
@@ -980,6 +1268,35 @@ fn visible_from_groups(groups: &[Vec<String>]) -> Vec<Vec<bool>> {
         }
     }
     visible
+}
+
+fn multiview_layout_for_rect(rect: Rect, video_size: f32) -> Option<MultiViewLayout> {
+    if rect.width() <= 1.0 || rect.height() <= 1.0 {
+        return None;
+    }
+
+    let target_size = video_size.clamp(MIN_MULTIVIEW_VIDEO_SIZE, MAX_MULTIVIEW_VIDEO_SIZE);
+    let mut columns = (rect.width() / target_size).ceil().max(1.0) as usize;
+    let mut rows = (rect.height() / target_size).ceil().max(1.0) as usize;
+
+    while columns * rows > MULTIVIEW_MAX_TILES {
+        if columns >= rows && columns > 1 {
+            columns -= 1;
+        } else if rows > 1 {
+            rows -= 1;
+        } else {
+            break;
+        }
+    }
+
+    Some(MultiViewLayout { columns, rows })
+}
+
+fn video_finished(player: &Player, before: PlayerState, after: PlayerState) -> bool {
+    let playback_started = player.duration_ms > 0 && player.elapsed_ms() > 0;
+    matches!(before, PlayerState::EndOfFile)
+        || matches!(after, PlayerState::EndOfFile)
+        || (matches!(after, PlayerState::Stopped) && playback_started)
 }
 
 fn fit_rect(container: Rect, content_size: Vec2) -> Rect {

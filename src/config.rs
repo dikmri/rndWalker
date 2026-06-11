@@ -9,6 +9,9 @@ pub const APP_NAME: &str = "rndWalker";
 pub const NUM_GROUPS: usize = 3;
 pub const MAX_SUB_FOLDERS: usize = 4;
 pub const DEFAULT_VOLUME: f32 = 0.10;
+pub const DEFAULT_MULTIVIEW_VIDEO_SIZE: f32 = 320.0;
+pub const MIN_MULTIVIEW_VIDEO_SIZE: f32 = 160.0;
+pub const MAX_MULTIVIEW_VIDEO_SIZE: f32 = 720.0;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -16,6 +19,8 @@ pub struct AppSettings {
     pub mp4_folder_paths: Vec<Vec<String>>,
     pub mp3_folder_path: String,
     pub volume: f32,
+    pub multiview_enabled: bool,
+    pub multiview_video_size: f32,
     pub presets: BTreeMap<String, FolderPreset>,
 }
 
@@ -32,6 +37,8 @@ impl Default for AppSettings {
             mp4_folder_paths: empty_folder_groups(),
             mp3_folder_path: String::new(),
             volume: DEFAULT_VOLUME,
+            multiview_enabled: false,
+            multiview_video_size: DEFAULT_MULTIVIEW_VIDEO_SIZE,
             presets: BTreeMap::new(),
         }
     }
@@ -79,6 +86,9 @@ impl AppSettings {
     pub fn normalize(&mut self) {
         self.mp4_folder_paths = normalize_folder_groups(std::mem::take(&mut self.mp4_folder_paths));
         self.volume = self.volume.clamp(0.0, 1.0);
+        self.multiview_video_size = self
+            .multiview_video_size
+            .clamp(MIN_MULTIVIEW_VIDEO_SIZE, MAX_MULTIVIEW_VIDEO_SIZE);
         for preset in self.presets.values_mut() {
             preset.mp4_folder_paths =
                 normalize_folder_groups(std::mem::take(&mut preset.mp4_folder_paths));
@@ -128,5 +138,17 @@ mod tests {
         assert!(groups.iter().all(|group| group.len() == MAX_SUB_FOLDERS));
         assert_eq!(groups[0][0], "a");
         assert_eq!(groups[1][1], "c");
+    }
+
+    #[test]
+    fn normalize_clamps_multiview_video_size() {
+        let mut settings = AppSettings {
+            multiview_video_size: 9999.0,
+            ..AppSettings::default()
+        };
+
+        settings.normalize();
+
+        assert_eq!(settings.multiview_video_size, MAX_MULTIVIEW_VIDEO_SIZE);
     }
 }
