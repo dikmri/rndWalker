@@ -13,6 +13,7 @@ The old Electron version has been saved to `legacy/electron/`, and future develo
 - Random play MP4 videos
 - MP4 folder management for up to 3 groups
 - Up to 4 folders can be registered in each MP4 group
+- Multi-view playback that fills the screen with video
 - Independent random playback of MP3 audio
 - Folder preset, volume, mute, settings save
 - Automatic update check at startup using GitHub Releases
@@ -57,9 +58,17 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 | Esc | Cancel full screen or close settings screen |
 | M | Mute switch |
 | W/S | Volume up / Volume down |
-| D/A | Next random video / Previous video |
-| left / top / right | Switch to folder group 1 / 2 / 3 after the current video ends |
-| under | Return to all folders after the current video ends |
+| D/A | Next random video / previous video. `D` in multiview reshuffles |
+| left / top / right | Switch to folder group 1 / 2 / 3 |
+| under | Return to all folders |
+
+## multi view
+
+If you check ``Enable multi-view'' on the settings screen, the videos in the current video folder will be played simultaneously across the entire screen.
+
+You can adjust the approximate tile size with the `Video size` slider. The aspect ratio of the videos will be maintained, and videos will be selected as separate as possible within the same screen. If the number of videos is less than the number of tiles, they will overlap.
+
+Each multi-view video will play silently, and audio playback for MP3 folders will continue independently as before.
 
 ## build
 
