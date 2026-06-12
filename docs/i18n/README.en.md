@@ -66,11 +66,11 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 
 If you check ``Enable multi-view'' on the settings screen, the videos in the current video folder will be played simultaneously across the entire screen.
 
-You can adjust the approximate tile size with the `Video size` slider. While maintaining the aspect ratio of the video, it will be cropped and displayed based on the center of each tile to avoid black margins. Choose different videos on the same screen whenever possible. If the number of videos is less than the number of tiles, they will overlap.
+You can adjust the approximate tile size with the `Video size` slider. Each video is displayed in its entirety without being cut, and the height is adjusted for each row so that there are no black gaps (the ratio may be adjusted by a few percent only in the vertical direction). Choose different videos on the same screen whenever possible. If the number of videos is less than the number of tiles, they will overlap.
 
 Each multi-view video will play silently, and audio playback for MP3 folders will continue independently as before.
 
-Each tile is reduced and decoded at a resolution that matches the display size of the cell, reducing the CPU/GPU load even when there are many tiles. A black cell will briefly appear while the video is loading, and will change when it's ready. Even if you resize the window, the tiles being played will remain as they are, and will be added or deleted by the amount of increase or decrease.
+Each tile is reduced and decoded at a resolution that matches the display size, so the CPU/GPU load can be reduced even when there are many tiles. A black cell will briefly appear while the video is loading, and will change when it's ready. When you resize the window, the playing tile remains intact, only the layout follows.
 
 ## build
 
