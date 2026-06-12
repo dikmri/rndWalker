@@ -1169,9 +1169,10 @@ impl Player {
         }
         let mut video_decoder_builder = video_context.decoder();
         if config.low_quality_decode {
-            // Skip the loop filter and any non-reference frames to trade quality for decode speed.
+            // Skip the loop filter to trade quality for decode speed. Do NOT use skip_frame
+            // here: dropping frames at decode time makes playback run fast, because the video
+            // timer pulls one decoded frame per 1/framerate tick regardless of frame gaps.
             video_decoder_builder.skip_loop_filter(Discard::All);
-            video_decoder_builder.skip_frame(Discard::NonReference);
         }
         let video_decoder = video_decoder_builder.video()?;
         let framerate = (video_stream.avg_frame_rate().numerator() as f64)

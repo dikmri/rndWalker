@@ -24,9 +24,7 @@ pub struct RndWalkerApp {
     pub(crate) queued_in_flight: bool,
     pub(crate) last_player_target_size: Option<(u32, u32)>,
     pub(crate) multiview_tiles: Vec<TileSlot>,
-    pub(crate) multiview_layout: Option<MultiViewLayout>,
     pub(crate) multiview_recent: Vec<PathBuf>,
-    pub(crate) multiview_cell_target_size: Option<(u32, u32)>,
     /// Paths currently being loaded per tile slot, so concurrent picks avoid duplicates.
     pub(crate) multiview_inflight: std::collections::HashMap<usize, PathBuf>,
     pub(crate) history: Vec<PathBuf>,
@@ -77,6 +75,9 @@ pub(crate) struct MultiViewTile {
     /// True while a replacement for this (finished) tile is being loaded in the background.
     /// The old frozen frame keeps rendering until the replacement arrives.
     pub(crate) replacing: bool,
+    /// Last decode target size applied to this tile's player (bucketed physical pixels). Used to
+    /// re-target the scaler only when the on-screen rect changes bucket.
+    pub(crate) last_target: Option<(u32, u32)>,
 }
 
 /// A multiview cell: either still loading its (first or replacement) player, or showing one.
@@ -88,18 +89,6 @@ pub(crate) enum TileSlot {
     Loading,
     /// Has a player to render. `replacing` tracks an in-flight successor load.
     Ready(MultiViewTile),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct MultiViewLayout {
-    pub(crate) columns: usize,
-    pub(crate) rows: usize,
-}
-
-impl MultiViewLayout {
-    pub(crate) fn tile_count(self) -> usize {
-        self.columns * self.rows
-    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -138,9 +127,7 @@ impl RndWalkerApp {
             queued_in_flight: false,
             last_player_target_size: None,
             multiview_tiles: Vec::new(),
-            multiview_layout: None,
             multiview_recent: Vec::new(),
-            multiview_cell_target_size: None,
             multiview_inflight: std::collections::HashMap::new(),
             history: Vec::new(),
             history_index: None,
