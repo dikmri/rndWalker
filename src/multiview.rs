@@ -15,52 +15,32 @@ pub(crate) const MULTIVIEW_MAX_TILE_ATTEMPTS: u8 = 3;
 /// invalid (non-positive dimensions).
 const FALLBACK_ASPECT: f32 = 16.0 / 9.0;
 
-/// Result of [`justified_layout`]: a tightly packed, aspect-preserving "masonry" tiling.
-pub(crate) struct JustifiedLayout {
-    /// One rect per tile index in input order; tiles beyond `used_tiles` get no rect.
-    pub rects: Vec<Rect>,
-    /// Number of leading tiles actually placed.
-    pub used_tiles: usize,
-    /// True if adding more tiles would meaningfully improve vertical fill.
-    pub needs_more: bool,
-}
-
-/// Lay out `aspects` (width / height per tile) into `area` as justified rows of `target_row_height`.
+/// One rect per input aspect, in order. Rows fill the width exactly at their natural height
+/// (width / sum(aspects)); rows stack from the top and the last rows may extend past
+/// `area.bottom()` — callers rely on clipping. No vertical scaling: aspect ratios are exact.
 ///
-/// Each row fills `area` horizontally exactly: tiles are appended greedily until their combined
-/// aspect sum would overflow the width, then the row height is set to `area.width() / sum(aspects)`
-/// so the unchanged aspect ratios pack to the full width. Rows stack until the cumulative height
-/// reaches `area.height()`. A single scale factor (clamped to [0.75, 1.33]) is applied to row
-/// heights to fit the area vertically; widths are unaffected, so the horizontal fill stays exact
-/// and the only distortion is that vertical scale factor (a few percent in practice).
+/// Each complete row is built greedily in input order: tiles are appended until their combined
+/// aspect sum would fill the width at `target_row_height`, then the row height is set to
+/// `area.width() / sum(aspects)` so the unchanged aspect ratios pack to the full width and the
+/// last tile of the row ends exactly at `area.right()`. A trailing INCOMPLETE row (tiles ran out
+/// before filling the width) is laid out at `target_row_height` with natural widths
+/// (`aspect * target_row_height`); it does not stretch to the right edge. Rows whose top falls
+/// below `area.bottom()` still receive rects; the egui painter clips them.
 ///
-/// Videos are never cropped: every tile shows its full frame at the row's (possibly scaled) height.
-pub(crate) fn justified_layout(
-    area: Rect,
-    target_row_height: f32,
-    aspects: &[f32],
-) -> JustifiedLayout {
+/// Videos are never cropped: every tile shows its full frame at its row height.
+pub(crate) fn justified_layout(area: Rect, target_row_height: f32, aspects: &[f32]) -> Vec<Rect> {
     // Guard: nothing to place, or a degenerate area.
     if aspects.is_empty() || area.width() <= 1.0 || area.height() <= 1.0 {
-        return JustifiedLayout {
-            rects: Vec::new(),
-            used_tiles: 0,
-            needs_more: false,
-        };
+        return Vec::new();
     }
 
     let target_row_height = target_row_height.max(1.0);
     let width = area.width();
 
-    // Greedy row assignment in input order. Each entry is (start_index, len, row_height).
-    struct Row {
-        start: usize,
-        len: usize,
-        height: f32,
-    }
-    let mut rows: Vec<Row> = Vec::new();
-    let mut cumulative_height = 0.0f32;
+    let mut rects: Vec<Rect> = Vec::with_capacity(aspects.len());
+    let mut y = area.top();
 
+    // Greedy row assignment in input order.
     let mut row_start = 0usize;
     let mut aspect_sum = 0.0f32;
     let mut index = 0usize;
@@ -71,111 +51,61 @@ pub(crate) fn justified_layout(
 
         // The row is complete once it would fill the width at the target height.
         if aspect_sum * target_row_height >= width {
-            let height = width / aspect_sum;
-            rows.push(Row {
-                start: row_start,
-                len: index - row_start,
-                height,
-            });
-            cumulative_height += height;
+            let row_height = width / aspect_sum;
+            let mut x = area.left();
+            for offset in 0..(index - row_start) {
+                let tile_aspect = sanitize_aspect(aspects[row_start + offset]);
+                let is_last_in_row = offset + 1 == index - row_start;
+                // Pin the last tile exactly to the right edge to absorb float error.
+                let right = if is_last_in_row {
+                    area.right()
+                } else {
+                    x + tile_aspect * row_height
+                };
+                rects.push(Rect::from_min_max(pos2(x, y), pos2(right, y + row_height)));
+                x = right;
+            }
+            y += row_height;
             row_start = index;
             aspect_sum = 0.0;
-
-            // Stop once the rows (including the overshoot row just added) fill the height.
-            if cumulative_height >= area.height() {
-                break;
-            }
         }
     }
 
-    // Trailing incomplete row: also fill the width exactly at its own (taller) height.
-    if row_start < index && aspect_sum > 0.0 {
-        let height = width / aspect_sum;
-        rows.push(Row {
-            start: row_start,
-            len: index - row_start,
-            height,
-        });
-        cumulative_height += height;
-    }
-
-    if rows.is_empty() {
-        return JustifiedLayout {
-            rects: Vec::new(),
-            used_tiles: 0,
-            needs_more: false,
-        };
-    }
-
-    // Vertical fit. Candidate (a): keep all rows, squeeze by f = height / total (<= 1).
-    // Candidate (b): drop the last row, stretch by f' = height / (total - h_last) (>= 1).
-    let total = cumulative_height;
-    let last_height = rows.last().map(|row| row.height).unwrap_or(0.0);
-    let factor_all = area.height() / total;
-    let factor_drop_last = if rows.len() > 1 && (total - last_height) > 0.0 {
-        Some(area.height() / (total - last_height))
-    } else {
-        None
-    };
-
-    let drop_last = match factor_drop_last {
-        Some(drop_factor) => (drop_factor - 1.0).abs() < (factor_all - 1.0).abs(),
-        None => false,
-    };
-
-    let (best_factor, place_rows) = if drop_last {
-        (factor_drop_last.unwrap(), rows.len() - 1)
-    } else {
-        (factor_all, rows.len())
-    };
-
-    // `needs_more` reflects real undershoot: tiles ran out (we never broke early on height) AND the
-    // unclamped best factor would have to stretch beyond 1.15 to fill the area.
-    let tiles_exhausted = index >= aspects.len() && cumulative_height < area.height();
-    let needs_more = tiles_exhausted && best_factor > 1.15;
-
-    let factor = best_factor.clamp(0.75, 1.33);
-    // When the factor had to be clamped (severe under/overshoot, e.g. while tiles are still
-    // loading), do NOT pin the last row to the bottom edge — that would stretch it wildly.
-    let factor_clamped = factor != best_factor;
-
-    // Emit rects row by row. Widths use the UNSCALED row height so each row still fills the
-    // width exactly and the vertical-fit distortion spreads evenly over all tiles instead of
-    // accumulating in the last tile of each row. The last tile of each row ends exactly at
-    // area.right(); when the rows fill the height, the final row ends exactly at area.bottom().
-    let mut rects: Vec<Rect> = Vec::new();
-    let mut y = area.top();
-    for (row_index, row) in rows.iter().take(place_rows).enumerate() {
-        let row_height = row.height * factor;
-        let is_last_row = row_index + 1 == place_rows;
-        let row_bottom = if is_last_row && !factor_clamped {
-            area.bottom()
-        } else {
-            y + row_height
-        };
-
+    // Trailing incomplete row: natural widths at the target height, no stretch to the right edge.
+    if row_start < index {
         let mut x = area.left();
-        for offset in 0..row.len {
-            let tile_index = row.start + offset;
-            let aspect = sanitize_aspect(aspects[tile_index]);
-            let is_last_in_row = offset + 1 == row.len;
-            let right = if is_last_in_row {
-                area.right()
-            } else {
-                x + aspect * row.height
-            };
-            rects.push(Rect::from_min_max(pos2(x, y), pos2(right, row_bottom)));
+        for offset in 0..(index - row_start) {
+            let tile_aspect = sanitize_aspect(aspects[row_start + offset]);
+            let right = x + tile_aspect * target_row_height;
+            rects.push(Rect::from_min_max(
+                pos2(x, y),
+                pos2(right, y + target_row_height),
+            ));
             x = right;
         }
-        y = row_bottom;
     }
 
-    let used_tiles = rects.len();
-    JustifiedLayout {
-        rects,
-        used_tiles,
-        needs_more,
-    }
+    rects
+}
+
+/// How many tiles should exist to fill `area` (with one row of overflow at the bottom), given the
+/// row height and the average tile aspect. Cheap to recompute every frame.
+///
+/// `per_row` and `row_count` are derived independently; the `+1` row guarantees the bottom always
+/// overflows (and is clipped) rather than underfilling. Result is clamped to a sane tile budget.
+fn desired_tile_count(area: Rect, row_height: f32, avg_aspect: f32) -> usize {
+    let row_height = row_height.max(1.0);
+    let avg_aspect = sanitize_aspect(avg_aspect);
+    let per_row = ((area.width() / (row_height * avg_aspect)).ceil() as usize).max(1);
+    let row_count = (((area.height() / row_height).ceil() as usize) + 1).max(1);
+    (per_row * row_count).clamp(1, MULTIVIEW_MAX_TILES)
+}
+
+/// Number of tiles per row for the hysteresis threshold, mirroring `desired_tile_count`'s `per_row`.
+fn tiles_per_row(area: Rect, row_height: f32, avg_aspect: f32) -> usize {
+    let row_height = row_height.max(1.0);
+    let avg_aspect = sanitize_aspect(avg_aspect);
+    ((area.width() / (row_height * avg_aspect)).ceil() as usize).max(1)
 }
 
 /// Clamp an aspect ratio to a sane positive range, substituting the fallback for invalid values.
@@ -305,12 +235,10 @@ impl RndWalkerApp {
             return;
         }
 
+        // Same formula as draw_multiview's desired_count, with FALLBACK_ASPECT for all tiles
+        // (none are Ready yet).
         let row_height = self.clamped_multiview_row_height();
-        let cols = (area.width() / (row_height * FALLBACK_ASPECT))
-            .ceil()
-            .max(1.0) as usize;
-        let row_count = (area.height() / row_height).ceil().max(1.0) as usize;
-        let tile_count = (cols * row_count).clamp(1, MULTIVIEW_MAX_TILES);
+        let tile_count = desired_tile_count(area, row_height, FALLBACK_ASPECT);
 
         self.multiview_tiles
             .resize_with(tile_count, || TileSlot::Loading);
@@ -441,11 +369,11 @@ impl RndWalkerApp {
                     .collect();
 
                 let row_height = self.clamped_multiview_row_height();
-                let layout = justified_layout(area, row_height, &aspects);
+                let rects = justified_layout(area, row_height, &aspects);
 
                 let mut finished_tiles = Vec::new();
                 for (index, slot) in self.multiview_tiles.iter_mut().enumerate() {
-                    let rect = layout.rects.get(index).copied();
+                    let rect = rects.get(index).copied();
                     match slot {
                         TileSlot::Loading => {
                             if let Some(rect) = rect {
@@ -491,22 +419,49 @@ impl RndWalkerApp {
                     }
                 }
 
-                // At most one corrective tile-count action per frame, to avoid thrash.
-                let len = self.multiview_tiles.len();
-                if layout.needs_more
-                    && len < MULTIVIEW_MAX_TILES
-                    && !self.library.active_videos(self.active_folder).is_empty()
-                {
-                    let index = len;
-                    self.multiview_tiles.push(TileSlot::Loading);
-                    self.enqueue_tile_load(index, 0, ppp);
-                    ctx.request_repaint();
-                } else if layout.used_tiles < len {
-                    // Surplus: drop one slot from the end.
-                    if let Some(TileSlot::Ready(mut tile)) = self.multiview_tiles.pop() {
-                        tile.player.stop();
+                // Tile-count management. Recompute the desired count each frame from the current
+                // area and the average aspect of Ready tiles, then only act when off by at least a
+                // full row (hysteresis). Acting on the whole deficit/surplus at once — instead of
+                // one tile per frame — avoids the add/remove oscillation that flooded the loader.
+                let mut aspect_sum = 0.0f32;
+                let mut ready_count = 0usize;
+                for slot in &self.multiview_tiles {
+                    if let TileSlot::Ready(tile) = slot {
+                        let size = tile.player.size;
+                        if size.x > 0.0 && size.y > 0.0 {
+                            aspect_sum += size.x / size.y;
+                            ready_count += 1;
+                        }
                     }
-                    self.multiview_inflight.remove(&(len - 1));
+                }
+                let avg_aspect = if ready_count > 0 {
+                    aspect_sum / ready_count as f32
+                } else {
+                    FALLBACK_ASPECT
+                };
+
+                let len = self.multiview_tiles.len();
+                let desired = desired_tile_count(area, row_height, avg_aspect);
+                let per_row = tiles_per_row(area, row_height, avg_aspect);
+                let has_videos = !self.library.active_videos(self.active_folder).is_empty();
+
+                if has_videos && len.abs_diff(desired) >= per_row {
+                    if desired > len {
+                        // Deficit: add the whole shortfall as Loading slots and enqueue each.
+                        for index in len..desired {
+                            self.multiview_tiles.push(TileSlot::Loading);
+                            self.enqueue_tile_load(index, 0, ppp);
+                        }
+                    } else {
+                        // Surplus: pop the whole excess from the end, stopping Ready players and
+                        // dropping any in-flight load tracked for those indices.
+                        for index in (desired..len).rev() {
+                            self.multiview_inflight.remove(&index);
+                            if let Some(TileSlot::Ready(mut tile)) = self.multiview_tiles.pop() {
+                                tile.player.stop();
+                            }
+                        }
+                    }
                     ctx.request_repaint();
                 }
             });
@@ -522,34 +477,48 @@ mod tests {
         Rect::from_min_max(pos2(0.0, 0.0), pos2(width, height))
     }
 
-    /// Every row's tile widths must sum exactly to the area width.
-    #[test]
-    fn rows_fill_width_exactly() {
-        let aspects = vec![16.0 / 9.0; 12];
-        let a = area(1600.0, 900.0);
-        let layout = justified_layout(a, 300.0, &aspects);
-        assert!(layout.used_tiles > 0);
-
-        // Group rects by their top edge to detect rows.
+    /// Group rects into rows by their shared top edge (input order is preserved).
+    fn group_rows(rects: &[Rect]) -> Vec<Vec<Rect>> {
         let mut rows: Vec<Vec<Rect>> = Vec::new();
-        for &rect in &layout.rects {
+        for &rect in rects {
             match rows.last_mut() {
                 Some(row) if (row[0].top() - rect.top()).abs() < 0.5 => row.push(rect),
                 _ => rows.push(vec![rect]),
             }
         }
+        rows
+    }
+
+    /// A row is "complete" when its tile widths span the full area width (last tile pinned right).
+    fn is_complete_row(row: &[Rect], a: Rect) -> bool {
+        (row.last().unwrap().right() - a.right()).abs() < 0.01
+    }
+
+    /// Every complete row's tile widths sum exactly to the area width.
+    #[test]
+    fn complete_rows_fill_width_exactly() {
+        let aspects = vec![16.0 / 9.0; 12];
+        let a = area(1600.0, 900.0);
+        let rects = justified_layout(a, 300.0, &aspects);
+        assert!(!rects.is_empty());
+
+        let rows = group_rows(&rects);
         for row in &rows {
-            let left = row.first().unwrap().left();
-            let right = row.last().unwrap().right();
-            assert!((left - a.left()).abs() < 0.01, "row starts at left");
+            if !is_complete_row(row, a) {
+                continue; // trailing incomplete row.
+            }
             assert!(
-                (right - a.right()).abs() < 0.01,
-                "row ends at right: {right}"
+                (row.first().unwrap().left() - a.left()).abs() < 0.01,
+                "row starts at left"
+            );
+            assert!(
+                (row.last().unwrap().right() - a.right()).abs() < 0.01,
+                "row ends at right"
             );
         }
     }
 
-    /// Placed rects must not overlap and must tile the area top-to-bottom without gaps.
+    /// Placed rects must not overlap and must stack contiguously from the top.
     #[test]
     fn rects_tile_without_gaps_or_overlap() {
         let aspects = vec![
@@ -563,17 +532,11 @@ mod tests {
             1.2,
         ];
         let a = area(1280.0, 720.0);
-        let layout = justified_layout(a, 240.0, &aspects);
-        assert!(layout.used_tiles > 0);
+        let rects = justified_layout(a, 240.0, &aspects);
+        assert!(!rects.is_empty());
 
+        let rows = group_rows(&rects);
         // Within a row, each tile's left equals the previous tile's right.
-        let mut rows: Vec<Vec<Rect>> = Vec::new();
-        for &rect in &layout.rects {
-            match rows.last_mut() {
-                Some(row) if (row[0].top() - rect.top()).abs() < 0.5 => row.push(rect),
-                _ => rows.push(vec![rect]),
-            }
-        }
         for row in &rows {
             for pair in row.windows(2) {
                 assert!(
@@ -593,83 +556,78 @@ mod tests {
         assert!((rows.first().unwrap()[0].top() - a.top()).abs() < 0.01);
     }
 
-    /// Uniform 16:9 tiles in a 16:9 area should need almost no vertical scaling.
+    /// Every input aspect gets a rect, in order.
     #[test]
-    fn uniform_tiles_in_matching_area_have_near_one_factor() {
-        // 16:9 area; choose enough tiles to make a clean grid.
-        let aspects = vec![16.0 / 9.0; 12];
-        let a = area(1920.0, 1080.0);
-        let target = 360.0; // 1080 / 3 rows.
-        let layout = justified_layout(a, target, &aspects);
-        assert!(layout.used_tiles > 0);
+    fn every_input_gets_a_rect() {
+        let aspects = vec![16.0 / 9.0, 1.0, 9.0 / 16.0, 1.5, 2.0, 1.2, 16.0 / 9.0];
+        let a = area(1000.0, 600.0);
+        let rects = justified_layout(a, 200.0, &aspects);
+        assert_eq!(rects.len(), aspects.len());
+    }
 
-        // Distortion = row height / (width-of-tile / aspect). Measure first placed tile.
-        let rect = layout.rects[0];
-        let drawn_aspect = rect.width() / rect.height();
-        let true_aspect = 16.0 / 9.0;
-        let distortion = (drawn_aspect / true_aspect - 1.0).abs();
+    /// Each rect in a complete row preserves its input aspect exactly (no distortion).
+    #[test]
+    fn complete_row_rects_preserve_aspect_exactly() {
+        let aspects = vec![16.0 / 9.0, 1.0, 9.0 / 16.0, 1.5, 2.0, 1.2, 16.0 / 9.0, 1.0];
+        let a = area(1280.0, 720.0);
+        let rects = justified_layout(a, 240.0, &aspects);
+
+        let rows = group_rows(&rects);
+        let mut input_index = 0usize;
+        for row in &rows {
+            let complete = is_complete_row(row, a);
+            for rect in row {
+                if complete {
+                    let drawn = rect.width() / rect.height();
+                    let expected = aspects[input_index];
+                    assert!(
+                        (drawn / expected - 1.0).abs() < 1e-3,
+                        "tile {input_index}: drawn {drawn} vs expected {expected}"
+                    );
+                }
+                input_index += 1;
+            }
+        }
+    }
+
+    /// A trailing incomplete row uses height == target_row_height with natural widths.
+    #[test]
+    fn incomplete_row_uses_target_height() {
+        // One short 16:9 tile in a wide area cannot fill the width at 200px height.
+        let aspects = vec![16.0 / 9.0];
+        let a = area(1600.0, 900.0);
+        let target = 200.0;
+        let rects = justified_layout(a, target, &aspects);
+        assert_eq!(rects.len(), 1);
+        let rect = rects[0];
         assert!(
-            distortion < 0.10,
-            "aspect distortion {distortion} should be < 10%"
+            (rect.height() - target).abs() < 0.01,
+            "incomplete row height {} should equal target {target}",
+            rect.height()
         );
+        // Natural width, not stretched to the right edge.
+        assert!(rect.right() < a.right());
+        assert!((rect.width() / rect.height() - 16.0 / 9.0).abs() < 1e-3);
     }
 
-    /// Too few tiles to fill the area vertically => needs_more is true.
+    /// With enough tiles to fill the height, the last row's bottom overflows past area.bottom().
     #[test]
-    fn needs_more_when_too_few_tiles() {
-        let aspects = vec![16.0 / 9.0; 2];
-        let a = area(800.0, 2000.0); // very tall: 2 tiles cannot fill it.
-        let layout = justified_layout(a, 200.0, &aspects);
-        assert!(layout.needs_more, "should request more tiles");
-        assert_eq!(layout.used_tiles, aspects.len());
-    }
-
-    /// Enough tiles to fill the area => needs_more is false.
-    #[test]
-    fn needs_more_false_when_enough_tiles() {
+    fn filled_layout_overflows_bottom() {
         let aspects = vec![16.0 / 9.0; 40];
         let a = area(1600.0, 900.0);
-        let layout = justified_layout(a, 300.0, &aspects);
-        assert!(!layout.needs_more, "should not request more tiles");
-    }
-
-    /// Surplus tiles => only a leading subset is used.
-    #[test]
-    fn surplus_tiles_leave_some_unused() {
-        let aspects = vec![16.0 / 9.0; 60];
-        let a = area(1600.0, 900.0);
-        let layout = justified_layout(a, 300.0, &aspects);
+        let rects = justified_layout(a, 300.0, &aspects);
+        let bottom = rects.iter().map(|r| r.bottom()).fold(f32::MIN, f32::max);
         assert!(
-            layout.used_tiles < aspects.len(),
-            "used {} of {}",
-            layout.used_tiles,
-            aspects.len()
+            bottom >= a.bottom() - 0.01,
+            "bottom {bottom} should reach/overflow area bottom {}",
+            a.bottom()
         );
     }
 
-    /// Empty input or degenerate area yields an empty layout.
+    /// Empty input or a degenerate area yields no rects.
     #[test]
     fn empty_inputs_yield_empty_layout() {
-        let empty = justified_layout(area(1600.0, 900.0), 300.0, &[]);
-        assert_eq!(empty.used_tiles, 0);
-        assert!(!empty.needs_more);
-
-        let tiny = justified_layout(area(0.5, 0.5), 300.0, &[16.0 / 9.0; 4]);
-        assert_eq!(tiny.used_tiles, 0);
-        assert!(!tiny.needs_more);
-    }
-
-    /// When the height is filled, the bottom edge of the last placed row touches area.bottom().
-    #[test]
-    fn filled_layout_reaches_bottom() {
-        let aspects = vec![16.0 / 9.0; 40];
-        let a = area(1600.0, 900.0);
-        let layout = justified_layout(a, 300.0, &aspects);
-        let bottom = layout
-            .rects
-            .iter()
-            .map(|r| r.bottom())
-            .fold(f32::MIN, f32::max);
-        assert!((bottom - a.bottom()).abs() < 0.01, "bottom {bottom}");
+        assert!(justified_layout(area(1600.0, 900.0), 300.0, &[]).is_empty());
+        assert!(justified_layout(area(0.5, 0.5), 300.0, &[16.0 / 9.0; 4]).is_empty());
     }
 }

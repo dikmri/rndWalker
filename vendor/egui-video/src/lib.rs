@@ -1239,9 +1239,19 @@ impl Player {
             temp_file: None,
         };
 
+        // Decode the first frame for the initial texture. This must be bounded: looping until
+        // success forever hangs the calling thread on files whose first frame never decodes
+        // (corrupt streams, EOF before a full frame), which starves the app's loader workers.
+        let mut first_frame_attempts = 0;
         loop {
-            if let Ok(_texture_handle) = streamer.try_set_texture_handle() {
-                break;
+            match streamer.try_set_texture_handle() {
+                Ok(_texture_handle) => break,
+                Err(error) => {
+                    first_frame_attempts += 1;
+                    if first_frame_attempts >= 3 {
+                        return Err(error);
+                    }
+                }
             }
         }
 

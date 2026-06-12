@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 /// Number of background worker threads used to construct [`Player`]s off the UI thread.
-const LOADER_WORKER_COUNT: usize = 2;
+const LOADER_WORKER_COUNT: usize = 3;
 
 /// What a finished load is for, so the app can dispatch the resulting [`Player`].
 pub(crate) enum LoadPurpose {
