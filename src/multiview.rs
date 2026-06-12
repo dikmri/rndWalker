@@ -10,6 +10,9 @@ pub(crate) const MULTIVIEW_MAX_TILES: usize = 64;
 pub(crate) const MULTIVIEW_RECENT_LIMIT: usize = 128;
 /// Maximum number of times a single tile slot retries a failed load before giving up.
 pub(crate) const MULTIVIEW_MAX_TILE_ATTEMPTS: u8 = 3;
+/// Begin loading a tile's replacement this many ms before its current video ends, so the new
+/// player is ready to swap in the instant the old one finishes (no frozen-frame wait).
+const TILE_PRELOAD_BEFORE_END_MS: i64 = 3_000;
 
 /// Fallback aspect ratio used for tiles whose real size is not yet known (still loading) or
 /// invalid (non-positive dimensions).
@@ -124,14 +127,25 @@ pub(crate) fn video_finished(player: &Player, before: PlayerState, after: Player
         || (matches!(after, PlayerState::Stopped) && playback_started)
 }
 
+/// Whether a Ready tile's player has already reached the end of its video (it is rendering a
+/// frozen last frame). Used so a freshly arrived replacement knows whether to swap in immediately
+/// (the old video already finished) or stash itself as a preload (the old video is still playing).
+fn tile_player_finished(player: &Player) -> bool {
+    let playback_started = player.duration_ms > 0 && player.elapsed_ms() > 0;
+    matches!(player.player_state.get(), PlayerState::EndOfFile)
+        || (matches!(player.player_state.get(), PlayerState::Stopped) && playback_started)
+}
+
 impl RndWalkerApp {
     pub(crate) fn stop_multiview(&mut self) {
-        for slot in &mut self.multiview_tiles {
+        for slot in self.multiview_tiles.drain(..) {
             if let TileSlot::Ready(tile) = slot {
-                tile.player.stop();
+                self.loader.dispose(tile.player);
+                if let Some((_, next_player)) = tile.next {
+                    self.loader.dispose(next_player);
+                }
             }
         }
-        self.multiview_tiles.clear();
         self.multiview_inflight.clear();
     }
 
@@ -160,24 +174,31 @@ impl RndWalkerApp {
         choose_random_path_avoiding_recent(videos, &avoided, avoided.len())
     }
 
-    /// Paths currently displayed or being loaded for tiles other than `skip_index`.
-    /// Used so a new tile load avoids duplicating what is already on screen.
+    /// Paths currently displayed, stashed as a pending replacement, or being loaded for tiles
+    /// other than `skip_index`. Used so a new tile load avoids duplicating what is already present.
+    ///
+    /// Pass `None` for `skip_index` to count every slot including the one being replaced; this is
+    /// used for replacement/preload picks so a tile does not immediately replay its own video.
     fn occupied_tile_paths(&self, skip_index: Option<usize>) -> Vec<PathBuf> {
-        self.multiview_tiles
-            .iter()
-            .enumerate()
-            .filter(|(index, _)| Some(*index) != skip_index)
-            .filter_map(|(_, slot)| match slot {
-                TileSlot::Ready(tile) => Some(tile.path.clone()),
-                TileSlot::Loading => None,
-            })
-            .chain(
-                self.multiview_inflight
-                    .iter()
-                    .filter(|(index, _)| Some(**index) != skip_index)
-                    .map(|(_, path)| path.clone()),
-            )
-            .collect()
+        let mut paths = Vec::new();
+        for (index, slot) in self.multiview_tiles.iter().enumerate() {
+            if Some(index) == skip_index {
+                continue;
+            }
+            if let TileSlot::Ready(tile) = slot {
+                paths.push(tile.path.clone());
+                // A stashed replacement is already spoken for; other picks must avoid it too.
+                if let Some((next_path, _)) = &tile.next {
+                    paths.push(next_path.clone());
+                }
+            }
+        }
+        for (index, path) in &self.multiview_inflight {
+            if Some(*index) != skip_index {
+                paths.push(path.clone());
+            }
+        }
+        paths
     }
 
     /// Bucketed decode size estimate for a freshly enqueued tile, based on the configured row
@@ -201,7 +222,9 @@ impl RndWalkerApp {
         if videos.is_empty() {
             return false;
         }
-        let occupied = self.occupied_tile_paths(Some(index));
+        // Avoid every occupied slot, including this one's own current path, so a finishing tile
+        // does not immediately replay the same video.
+        let occupied = self.occupied_tile_paths(None);
         let Some(path) = self.choose_multiview_video_path(&videos, &occupied) else {
             return false;
         };
@@ -221,13 +244,8 @@ impl RndWalkerApp {
     /// Build an initial set of `Loading` slots sized to roughly fill the current window, then
     /// enqueue a fresh tile load for each. The per-frame adaptation converges to the exact count.
     fn build_initial_multiview_slots(&mut self, area: Rect, ppp: f32) {
-        for slot in &mut self.multiview_tiles {
-            if let TileSlot::Ready(tile) = slot {
-                tile.player.stop();
-            }
-        }
-        self.multiview_tiles.clear();
-        self.multiview_inflight.clear();
+        // Dispose any existing players (and stashed replacements) off the UI thread.
+        self.stop_multiview();
 
         // With no playable videos, leave the slot list empty so the "no videos" message renders
         // instead of a wall of black cells.
@@ -247,9 +265,18 @@ impl RndWalkerApp {
         }
     }
 
-    /// Main-thread handler for a finished `Tile` load. On success, swaps the player into the slot
-    /// (stopping the old frozen player if any). On failure, records the bad path and retries with
-    /// a fresh path up to `MULTIVIEW_MAX_TILE_ATTEMPTS`.
+    /// Main-thread handler for a finished `Tile` load.
+    ///
+    /// On success, the action depends on the current slot:
+    /// - `Loading` (initial / deficit fill): install and play immediately.
+    /// - `Ready` whose video already finished (it was frozen, waiting): swap immediately, disposing
+    ///   the old player off the UI thread.
+    /// - `Ready` still playing (this was a preload): pause the new player and stash it in `next`,
+    ///   keeping `next_requested = true` so the preload trigger does not refire.
+    ///
+    /// On failure, records the bad path and retries with a fresh path up to
+    /// `MULTIVIEW_MAX_TILE_ATTEMPTS`; on final failure clears `next_requested` so a later finish
+    /// can retry.
     pub(crate) fn on_tile_loaded(
         &mut self,
         ctx: &Context,
@@ -260,9 +287,9 @@ impl RndWalkerApp {
     ) {
         self.multiview_inflight.remove(&index);
         if index >= self.multiview_tiles.len() {
-            // Slot vector shrank after the request was issued; discard.
-            if let Ok(mut player) = player {
-                player.stop();
+            // Slot vector shrank after the request was issued; discard off the UI thread.
+            if let Ok(player) = player {
+                self.loader.dispose(player);
             }
             return;
         }
@@ -274,16 +301,47 @@ impl RndWalkerApp {
                 // Seed a reasonable decode size; the per-frame pass corrects it to the real rect.
                 let target = self.tile_load_target_size(ppp);
                 player.set_target_texture_size(target.0, target.1);
-                // Stop the old frozen player (if this slot was a replacing Ready tile).
-                if let TileSlot::Ready(old) = &mut self.multiview_tiles[index] {
-                    old.player.stop();
+
+                match std::mem::replace(&mut self.multiview_tiles[index], TileSlot::Loading) {
+                    TileSlot::Loading => {
+                        // Fresh slot: install and play (the worker already called start()).
+                        self.multiview_tiles[index] = TileSlot::Ready(MultiViewTile {
+                            path,
+                            player,
+                            next: None,
+                            next_requested: false,
+                            last_target: Some(target),
+                        });
+                    }
+                    TileSlot::Ready(mut old) => {
+                        if tile_player_finished(&old.player) {
+                            // Old video already finished and is frozen: swap in now. The old path
+                            // was already pushed to recent when it finished, so do not re-push.
+                            self.loader.dispose(old.player);
+                            // Defensive: if a stale `next` somehow lingered, dispose it too.
+                            if let Some((_, stale)) = old.next.take() {
+                                self.loader.dispose(stale);
+                            }
+                            self.multiview_tiles[index] = TileSlot::Ready(MultiViewTile {
+                                path,
+                                player,
+                                next: None,
+                                next_requested: false,
+                                last_target: Some(target),
+                            });
+                        } else {
+                            // Preload arrived while the old video is still playing: pause it (caps
+                            // how far ahead it runs) and stash it. Keep next_requested = true.
+                            player.pause();
+                            if let Some((_, stale)) = old.next.replace((path, player)) {
+                                // Should not happen given the invariant; dispose defensively.
+                                self.loader.dispose(stale);
+                            }
+                            old.next_requested = true;
+                            self.multiview_tiles[index] = TileSlot::Ready(old);
+                        }
+                    }
                 }
-                self.multiview_tiles[index] = TileSlot::Ready(MultiViewTile {
-                    path,
-                    player,
-                    replacing: false,
-                    last_target: Some(target),
-                });
             }
             Err(error) => {
                 self.push_multiview_recent(path);
@@ -291,20 +349,21 @@ impl RndWalkerApp {
                     if !self.enqueue_tile_load(index, attempts + 1, ppp) {
                         // No path available right now; leave the slot as-is (Loading or frozen
                         // Ready), it will retry on the next tile-finished/shuffle.
-                        self.clear_tile_replacing(index);
+                        self.clear_tile_next_requested(index);
                     }
                 } else {
-                    self.clear_tile_replacing(index);
+                    self.clear_tile_next_requested(index);
                     self.show_info(format!("マルチビュー動画を読み込めません: {error}"));
                 }
             }
         }
     }
 
-    /// If the slot is a Ready tile marked as replacing, clear that flag (its replacement failed).
-    fn clear_tile_replacing(&mut self, index: usize) {
+    /// If the slot is a Ready tile, clear its `next_requested` flag (its replacement load failed),
+    /// so a later finish can retry.
+    fn clear_tile_next_requested(&mut self, index: usize) {
         if let Some(TileSlot::Ready(tile)) = self.multiview_tiles.get_mut(index) {
-            tile.replacing = false;
+            tile.next_requested = false;
         }
     }
 
@@ -371,7 +430,13 @@ impl RndWalkerApp {
                 let row_height = self.clamped_multiview_row_height();
                 let rects = justified_layout(area, row_height, &aspects);
 
-                let mut finished_tiles = Vec::new();
+                // Deferred actions: we cannot borrow `self.loader` / call `self` methods while
+                // iterating `self.multiview_tiles` mutably, so collect and apply after the loop.
+                let mut to_dispose: Vec<Player> = Vec::new();
+                let mut recent_to_push: Vec<PathBuf> = Vec::new();
+                let mut to_enqueue: Vec<usize> = Vec::new();
+                let preload_target = self.tile_load_target_size(ppp);
+
                 for (index, slot) in self.multiview_tiles.iter_mut().enumerate() {
                     let rect = rects.get(index).copied();
                     match slot {
@@ -401,21 +466,63 @@ impl RndWalkerApp {
                             let before = tile.player.player_state.get();
                             tile.player.process_state();
                             let after = tile.player.player_state.get();
-                            // Keep rendering the frozen last frame while a replacement loads; only
-                            // enqueue a replacement once per finished playthrough.
-                            if !tile.replacing && video_finished(&tile.player, before, after) {
-                                finished_tiles.push((index, tile.path.clone()));
-                                tile.replacing = true;
+
+                            // Preload trigger: a few seconds before the end, start loading the
+                            // replacement so it is ready to swap in the instant this video ends.
+                            let elapsed_ms = tile.player.elapsed_ms();
+                            let remaining_ms = tile.player.duration_ms.saturating_sub(elapsed_ms);
+                            if tile.player.duration_ms > 0
+                                && remaining_ms <= TILE_PRELOAD_BEFORE_END_MS
+                                && tile.next.is_none()
+                                && !tile.next_requested
+                            {
+                                tile.next_requested = true;
+                                // Record the outgoing path now (the single point where a
+                                // replacement is first requested), so it is in `recent` no matter
+                                // which path later performs the swap.
+                                recent_to_push.push(tile.path.clone());
+                                to_enqueue.push(index);
+                            }
+
+                            if video_finished(&tile.player, before, after) {
+                                if let Some((next_path, mut next_player)) = tile.next.take() {
+                                    // Replacement preloaded: swap it in instantly. The old player
+                                    // goes off-thread for disposal; its path already entered
+                                    // recent when the replacement was requested.
+                                    next_player.resume();
+                                    next_player.set_target_texture_size(
+                                        preload_target.0,
+                                        preload_target.1,
+                                    );
+                                    let old = std::mem::replace(&mut tile.player, next_player);
+                                    to_dispose.push(old);
+                                    tile.path = next_path;
+                                    tile.next_requested = false;
+                                    tile.last_target = Some(preload_target);
+                                } else if !tile.next_requested {
+                                    // No preload in flight (it never triggered, or a prior load
+                                    // failed): keep the frozen frame and request a replacement now.
+                                    tile.next_requested = true;
+                                    recent_to_push.push(tile.path.clone());
+                                    to_enqueue.push(index);
+                                }
+                                // else: a preload is still in flight; keep the frozen last frame.
+                                // on_tile_loaded will swap it in when it arrives.
                             }
                         }
                     }
                 }
 
-                for (index, old_path) in finished_tiles {
-                    self.push_multiview_recent(old_path);
+                for old in to_dispose {
+                    self.loader.dispose(old);
+                }
+                for path in recent_to_push {
+                    self.push_multiview_recent(path);
+                }
+                for index in to_enqueue {
                     if !self.enqueue_tile_load(index, 0, ppp) {
                         // No fresh path available: clear the guard so it retries next finish.
-                        self.clear_tile_replacing(index);
+                        self.clear_tile_next_requested(index);
                     }
                 }
 
@@ -453,12 +560,16 @@ impl RndWalkerApp {
                             self.enqueue_tile_load(index, 0, ppp);
                         }
                     } else {
-                        // Surplus: pop the whole excess from the end, stopping Ready players and
-                        // dropping any in-flight load tracked for those indices.
+                        // Surplus: pop the whole excess from the end, disposing Ready players (and
+                        // any stashed replacement) off the UI thread and dropping any in-flight
+                        // load tracked for those indices.
                         for index in (desired..len).rev() {
                             self.multiview_inflight.remove(&index);
-                            if let Some(TileSlot::Ready(mut tile)) = self.multiview_tiles.pop() {
-                                tile.player.stop();
+                            if let Some(TileSlot::Ready(tile)) = self.multiview_tiles.pop() {
+                                self.loader.dispose(tile.player);
+                                if let Some((_, next_player)) = tile.next {
+                                    self.loader.dispose(next_player);
+                                }
                             }
                         }
                     }

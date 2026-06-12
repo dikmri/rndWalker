@@ -72,9 +72,13 @@ pub(crate) struct PreparedVideo {
 pub(crate) struct MultiViewTile {
     pub(crate) path: PathBuf,
     pub(crate) player: Player,
-    /// True while a replacement for this (finished) tile is being loaded in the background.
-    /// The old frozen frame keeps rendering until the replacement arrives.
-    pub(crate) replacing: bool,
+    /// Replacement player loaded ahead of the video's end, swapped in instantly on finish.
+    /// While `Some`, `next_requested` stays true so the preload trigger does not refire.
+    pub(crate) next: Option<(PathBuf, Player)>,
+    /// True while a replacement load for this tile is in flight (preload or post-finish), or while
+    /// a preloaded `next` is stashed awaiting the swap. Reset to false only when the swap completes
+    /// or a load finally fails, so exactly one replacement is requested per playthrough.
+    pub(crate) next_requested: bool,
     /// Last decode target size applied to this tile's player (bucketed physical pixels). Used to
     /// re-target the scaler only when the on-screen rect changes bucket.
     pub(crate) last_target: Option<(u32, u32)>,
@@ -87,7 +91,7 @@ pub(crate) struct MultiViewTile {
 pub(crate) enum TileSlot {
     /// No player yet; renders as a plain black cell. A `Tile` load is in flight for this index.
     Loading,
-    /// Has a player to render. `replacing` tracks an in-flight successor load.
+    /// Has a player to render. `next`/`next_requested` track its preloaded/in-flight successor.
     Ready(MultiViewTile),
 }
 
@@ -389,8 +393,8 @@ impl RndWalkerApp {
     pub(crate) fn drain_loader_results(&mut self, ctx: &Context) {
         while let Some(result) = self.loader.try_recv() {
             if result.request.generation != self.loader_generation {
-                if let Ok(mut player) = result.player {
-                    player.stop();
+                if let Ok(player) = result.player {
+                    self.loader.dispose(player);
                 }
                 continue;
             }

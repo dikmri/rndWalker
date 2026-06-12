@@ -45,7 +45,11 @@ pub(crate) struct LoadResult {
 pub(crate) struct PlayerLoader {
     request_tx: Sender<LoadRequest>,
     result_rx: Receiver<LoadResult>,
+    /// Sends finished-with players to a dedicated thread that stops and drops them off the UI
+    /// thread. Kept separate from the load workers so a slow disposal never delays a load.
+    dispose_tx: Sender<Player>,
     _workers: Vec<thread::JoinHandle<()>>,
+    _disposer: thread::JoinHandle<()>,
 }
 
 impl PlayerLoader {
@@ -66,10 +70,22 @@ impl PlayerLoader {
             }));
         }
 
+        // Dedicated disposal thread: stops and drops players handed to it, so the UI thread never
+        // blocks on Player::stop() (decoder mutex) or the timer-thread joins triggered by Drop.
+        let (dispose_tx, dispose_rx) = mpsc::channel::<Player>();
+        let disposer = thread::spawn(move || {
+            while let Ok(mut player) = dispose_rx.recv() {
+                player.stop();
+                drop(player);
+            }
+        });
+
         Self {
             request_tx,
             result_rx,
+            dispose_tx,
             _workers: workers,
+            _disposer: disposer,
         }
     }
 
@@ -81,6 +97,14 @@ impl PlayerLoader {
     /// Pop the next finished load, if any.
     pub(crate) fn try_recv(&self) -> Option<LoadResult> {
         self.result_rx.try_recv().ok()
+    }
+
+    /// Stop and drop the player on a background thread; never blocks the UI thread.
+    ///
+    /// If the disposal thread has gone away the player is dropped here as a fallback (only
+    /// possible during shutdown), which is acceptable.
+    pub(crate) fn dispose(&self, player: Player) {
+        let _ = self.dispose_tx.send(player);
     }
 }
 

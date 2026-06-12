@@ -67,9 +67,9 @@ impl RndWalkerApp {
         player: Result<Player, String>,
     ) {
         if self.pending_single != Some(request_id) {
-            // A later press already superseded this load; discard it.
-            if let Ok(mut player) = player {
-                player.stop();
+            // A later press already superseded this load; discard it off the UI thread.
+            if let Ok(player) = player {
+                self.loader.dispose(player);
             }
             return;
         }
@@ -96,17 +96,16 @@ impl RndWalkerApp {
     }
 
     pub(crate) fn stop_video(&mut self) {
-        if let Some(player) = self.player.as_mut() {
-            player.stop();
+        if let Some(player) = self.player.take() {
+            self.loader.dispose(player);
         }
-        self.player = None;
         self.video_audio_device = None;
         self.current_video = None;
     }
 
     pub(crate) fn clear_queued_video(&mut self) {
-        if let Some(mut queued_video) = self.queued_video.take() {
-            queued_video.player.stop();
+        if let Some(queued_video) = self.queued_video.take() {
+            self.loader.dispose(queued_video.player);
         }
         self.queued_video_folder = None;
     }
