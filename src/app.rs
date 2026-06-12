@@ -879,9 +879,7 @@ impl RndWalkerApp {
                         rect.min + Vec2::new(column as f32 * cell_width, row as f32 * cell_height),
                         Vec2::new(cell_width, cell_height),
                     );
-                    let target = fit_rect(cell_rect, tile.player.size);
-
-                    tile.player.render_frame_at(ui, target);
+                    render_video_cover(ui, &tile.player, cell_rect);
                     let state_before_process = tile.player.player_state.get();
                     tile.player.process_state();
                     let state_after_process = tile.player.player_state.get();
@@ -1306,6 +1304,38 @@ fn fit_rect(container: Rect, content_size: Vec2) -> Rect {
 
     let scale = (container.width() / content_size.x).min(container.height() / content_size.y);
     Rect::from_center_size(container.center(), content_size * scale)
+}
+
+fn render_video_cover(ui: &mut egui::Ui, player: &Player, rect: Rect) {
+    ui.painter().image(
+        player.texture_handle.id(),
+        rect,
+        cover_uv_rect(rect, player.size),
+        Color32::WHITE,
+    );
+}
+
+fn cover_uv_rect(container: Rect, content_size: Vec2) -> Rect {
+    if container.width() <= 0.0
+        || container.height() <= 0.0
+        || content_size.x <= 0.0
+        || content_size.y <= 0.0
+    {
+        return Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
+    }
+
+    let container_aspect = container.width() / container.height();
+    let content_aspect = content_size.x / content_size.y;
+
+    if content_aspect > container_aspect {
+        let visible_width = (container_aspect / content_aspect).clamp(0.0, 1.0);
+        let inset = (1.0 - visible_width) * 0.5;
+        Rect::from_min_max(egui::pos2(inset, 0.0), egui::pos2(1.0 - inset, 1.0))
+    } else {
+        let visible_height = (content_aspect / container_aspect).clamp(0.0, 1.0);
+        let inset = (1.0 - visible_height) * 0.5;
+        Rect::from_min_max(egui::pos2(0.0, inset), egui::pos2(1.0, 1.0 - inset))
+    }
 }
 
 fn overlay_frame() -> Frame {
