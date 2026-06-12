@@ -59,6 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 | M | Mute switch |
 | W/S | Volume up / Volume down |
 | D/A | Next random video / previous video. `D` in multiview reshuffles |
+| mouse wheel | Change video size during multi-view (up to enlarge/down to reduce) |
 | left / top / right | Switch to folder group 1 / 2 / 3 |
 | under | Return to all folders |
 
@@ -66,7 +67,7 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 
 If you check ``Enable multi-view'' on the settings screen, the videos in the current video folder will be played simultaneously across the entire screen.
 
-You can adjust the approximate tile size with the `Video size` slider. Each video will be displayed in its entirety without being cut or transformed, and the height of each row will be the same so that there will be no black gaps. The bottom line may be slightly cut off at the bottom of the screen. Choose different videos on the same screen whenever possible. If the number of videos is less than the number of tiles, they will overlap.
+You can adjust the approximate tile size with the `Video size` slider. Each video will be displayed in its entirety without being cut or transformed, and the height of each row will be the same so that there will be no black gaps. The bottom row may be slightly cut off at the bottom of the screen. Choose different videos on the same screen whenever possible. If the number of videos is less than the number of tiles, they will overlap.
 
 Each multi-view video will play silently, and audio playback for MP3 folders will continue independently as before.
 
