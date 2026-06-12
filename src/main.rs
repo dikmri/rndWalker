@@ -3,7 +3,11 @@
 mod app;
 mod config;
 mod icon;
+mod loader;
 mod media;
+mod multiview;
+mod playback;
+mod ui;
 mod updater;
 
 use app::RndWalkerApp;

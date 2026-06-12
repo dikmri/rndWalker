@@ -70,9 +70,11 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 
 マルチビューの各動画は無音で再生され、MP3 フォルダの音声再生は従来どおり独立して続きます。
 
+各タイルはセルの表示サイズに合わせた解像度で縮小デコードされるため、多タイル時でも CPU / GPU 負荷を抑えられます。動画のロード中は黒いセルが短時間表示され、準備ができ次第切り替わります。ウインドウをリサイズしても再生中のタイルはそのまま維持され、増減分だけ追加・削除されます。
+
 ## ビルド
 
-`egui-video` が FFmpeg を使うため、開発環境には FFmpeg 7 の開発ライブラリと `pkg-config` が必要です。
+動画デコードには `vendor/egui-video` のフォーク版を使用しています。FFmpeg 7 の開発ライブラリと `pkg-config` が開発環境に必要です。
 
 ```powershell
 cargo build --release

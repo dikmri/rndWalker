@@ -1,98 +1,109 @@
-use crate::config::{
-    AppSettings, FolderPreset, MAX_MULTIVIEW_VIDEO_SIZE, MAX_SUB_FOLDERS, MIN_MULTIVIEW_VIDEO_SIZE,
-    NUM_GROUPS,
-};
-use crate::media::{choose_random_path, choose_random_path_avoiding_recent, MediaLibrary};
+use crate::config::AppSettings;
+use crate::loader::{LoadPurpose, LoadResult, PlayerLoader};
+use crate::media::{choose_random_path, MediaLibrary};
+use crate::ui::visible_from_groups;
 use crate::updater::{self, UpdateMessage};
-use eframe::egui::{
-    self, Align, Align2, Area, CentralPanel, Color32, ComboBox, Context, FontData, FontDefinitions,
-    FontFamily, FontId, Frame, Id, Key, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke,
-    TextEdit, Vec2, ViewportCommand, Window,
-};
-use egui_video::{AudioDevice, Player, PlayerState};
+use eframe::egui::{Context, Key, ViewportCommand};
+use egui_video::{AudioDevice, Player};
 use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink};
 use std::fs::File;
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
-const JAPANESE_FONT_NAME: &str = "ZenKakuGothicNew";
-const VIDEO_PRELOAD_BEFORE_END_MS: i64 = 2_500;
-const VIDEO_PRELOAD_WARMUP_MS: i64 = 140;
-const VIDEO_PRELOAD_WARMUP_TIMEOUT_MS: u64 = 700;
-const VIDEO_FINISH_GRACE_MS: i64 = 30;
-const RANDOM_RECENT_EXCLUSION_COUNT: usize = 3;
-const MULTIVIEW_MAX_TILES: usize = 64;
-const MULTIVIEW_RECENT_LIMIT: usize = 128;
+pub(crate) const JAPANESE_FONT_NAME: &str = "ZenKakuGothicNew";
 
 pub struct RndWalkerApp {
-    settings: AppSettings,
-    library: MediaLibrary,
-    player: Option<Player>,
-    video_audio_device: Option<AudioDevice>,
-    queued_video: Option<PreparedVideo>,
-    queued_video_folder: Option<usize>,
-    current_video: Option<PathBuf>,
-    multiview_tiles: Vec<MultiViewTile>,
-    multiview_layout: Option<MultiViewLayout>,
-    multiview_recent: Vec<PathBuf>,
-    history: Vec<PathBuf>,
-    history_index: Option<usize>,
-    mp3_sink: Option<MixerDeviceSink>,
-    mp3_player: Option<rodio::Player>,
-    current_audio: Option<PathBuf>,
-    active_folder: Option<usize>,
-    pending_folder: Option<Option<usize>>,
-    show_settings: bool,
-    folder_inputs: Vec<Vec<String>>,
-    visible_sub_folders: Vec<Vec<bool>>,
-    mp3_input: String,
-    multiview_enabled_input: bool,
-    multiview_video_size_input: f32,
-    selected_preset: String,
-    preset_name_input: String,
-    volume: f32,
-    muted: bool,
-    fullscreen: bool,
-    indicator: Option<TimedMessage>,
-    info: Option<TimedMessage>,
-    update_rx: Receiver<UpdateMessage>,
-    update_message: UpdateMessage,
+    pub(crate) settings: AppSettings,
+    pub(crate) library: MediaLibrary,
+    pub(crate) player: Option<Player>,
+    pub(crate) video_audio_device: Option<AudioDevice>,
+    pub(crate) queued_video: Option<PreparedVideo>,
+    pub(crate) queued_video_folder: Option<usize>,
+    pub(crate) current_video: Option<PathBuf>,
+    pub(crate) queued_in_flight: bool,
+    pub(crate) last_player_target_size: Option<(u32, u32)>,
+    pub(crate) multiview_tiles: Vec<TileSlot>,
+    pub(crate) multiview_layout: Option<MultiViewLayout>,
+    pub(crate) multiview_recent: Vec<PathBuf>,
+    pub(crate) multiview_cell_target_size: Option<(u32, u32)>,
+    /// Paths currently being loaded per tile slot, so concurrent picks avoid duplicates.
+    pub(crate) multiview_inflight: std::collections::HashMap<usize, PathBuf>,
+    pub(crate) history: Vec<PathBuf>,
+    pub(crate) history_index: Option<usize>,
+    pub(crate) mp3_sink: Option<MixerDeviceSink>,
+    pub(crate) mp3_player: Option<rodio::Player>,
+    pub(crate) current_audio: Option<PathBuf>,
+    pub(crate) active_folder: Option<usize>,
+    pub(crate) pending_folder: Option<Option<usize>>,
+    pub(crate) show_settings: bool,
+    pub(crate) folder_inputs: Vec<Vec<String>>,
+    pub(crate) visible_sub_folders: Vec<Vec<bool>>,
+    pub(crate) mp3_input: String,
+    pub(crate) multiview_enabled_input: bool,
+    pub(crate) multiview_video_size_input: f32,
+    pub(crate) selected_preset: String,
+    pub(crate) preset_name_input: String,
+    pub(crate) volume: f32,
+    pub(crate) muted: bool,
+    pub(crate) fullscreen: bool,
+    pub(crate) indicator: Option<TimedMessage>,
+    pub(crate) info: Option<TimedMessage>,
+    pub(crate) update_rx: Receiver<UpdateMessage>,
+    pub(crate) update_message: UpdateMessage,
+    pub(crate) loader: PlayerLoader,
+    pub(crate) loader_generation: u64,
+    pub(crate) next_single_request_id: u64,
+    pub(crate) pending_single: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
-struct TimedMessage {
-    text: String,
-    until: Instant,
+pub(crate) struct TimedMessage {
+    pub(crate) text: String,
+    pub(crate) until: Instant,
 }
 
-struct PreparedVideo {
-    path: PathBuf,
-    player: Player,
-    audio_device: Option<AudioDevice>,
-    warning: Option<String>,
-    preload_state: PreloadState,
+pub(crate) struct PreparedVideo {
+    pub(crate) path: PathBuf,
+    pub(crate) player: Player,
+    pub(crate) audio_device: Option<AudioDevice>,
+    pub(crate) warning: Option<String>,
+    pub(crate) preload_state: PreloadState,
 }
 
-struct MultiViewTile {
-    path: PathBuf,
-    player: Player,
+pub(crate) struct MultiViewTile {
+    pub(crate) path: PathBuf,
+    pub(crate) player: Player,
+    /// True while a replacement for this (finished) tile is being loaded in the background.
+    /// The old frozen frame keeps rendering until the replacement arrives.
+    pub(crate) replacing: bool,
+}
+
+/// A multiview cell: either still loading its (first or replacement) player, or showing one.
+// At most MULTIVIEW_MAX_TILES slots exist, so the variant size gap is irrelevant; boxing the
+// player would only add indirection on the per-frame render path.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum TileSlot {
+    /// No player yet; renders as a plain black cell. A `Tile` load is in flight for this index.
+    Loading,
+    /// Has a player to render. `replacing` tracks an in-flight successor load.
+    Ready(MultiViewTile),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct MultiViewLayout {
-    columns: usize,
-    rows: usize,
+pub(crate) struct MultiViewLayout {
+    pub(crate) columns: usize,
+    pub(crate) rows: usize,
 }
 
 impl MultiViewLayout {
-    fn tile_count(self) -> usize {
+    pub(crate) fn tile_count(self) -> usize {
         self.columns * self.rows
     }
 }
 
 #[derive(Debug, Clone, Copy)]
-enum PreloadState {
+pub(crate) enum PreloadState {
     Cold,
     Warming { started_at: Instant },
     SeekingToStart,
@@ -111,6 +122,7 @@ impl RndWalkerApp {
         let multiview_enabled = settings.multiview_enabled;
         let multiview_video_size = settings.multiview_video_size;
         let update_rx = updater::spawn_update_check();
+        let loader = PlayerLoader::new(cc.egui_ctx.clone());
 
         let mut app = Self {
             folder_inputs: settings.mp4_folder_paths.clone(),
@@ -123,9 +135,13 @@ impl RndWalkerApp {
             queued_video: None,
             queued_video_folder: None,
             current_video: None,
+            queued_in_flight: false,
+            last_player_target_size: None,
             multiview_tiles: Vec::new(),
             multiview_layout: None,
             multiview_recent: Vec::new(),
+            multiview_cell_target_size: None,
+            multiview_inflight: std::collections::HashMap::new(),
             history: Vec::new(),
             history_index: None,
             mp3_sink: None,
@@ -145,6 +161,10 @@ impl RndWalkerApp {
             info: None,
             update_rx,
             update_message: UpdateMessage::Checking,
+            loader,
+            loader_generation: 0,
+            next_single_request_id: 0,
+            pending_single: None,
         };
 
         app.init_audio();
@@ -159,7 +179,7 @@ impl RndWalkerApp {
         app
     }
 
-    fn init_audio(&mut self) {
+    pub(crate) fn init_audio(&mut self) {
         match DeviceSinkBuilder::open_default_sink() {
             Ok(mut sink) => {
                 sink.log_on_drop(false);
@@ -170,7 +190,17 @@ impl RndWalkerApp {
         }
     }
 
-    fn reload_library(&mut self, ctx: &Context) {
+    /// Invalidate any in-flight background loads. Results carrying an older generation are
+    /// stopped and dropped when they arrive. Also clears the single-view in-flight markers so a
+    /// fresh load can be enqueued immediately.
+    pub(crate) fn bump_loader_generation(&mut self) {
+        self.loader_generation = self.loader_generation.wrapping_add(1);
+        self.pending_single = None;
+        self.queued_in_flight = false;
+    }
+
+    pub(crate) fn reload_library(&mut self, ctx: &Context) {
+        self.bump_loader_generation();
         self.settings.normalize();
         self.library = MediaLibrary::from_settings(&self.settings);
         self.active_folder = None;
@@ -196,7 +226,8 @@ impl RndWalkerApp {
         self.restart_random_audio();
     }
 
-    fn reload_active_video_folder(&mut self) {
+    pub(crate) fn reload_active_video_folder(&mut self) {
+        self.bump_loader_generation();
         self.library = MediaLibrary::from_settings(&self.settings);
         self.clear_queued_video();
         self.stop_multiview();
@@ -207,377 +238,7 @@ impl RndWalkerApp {
         ));
     }
 
-    fn play_next_video(&mut self, ctx: &Context, add_to_history: bool) {
-        self.clear_queued_video();
-        let videos = self.library.active_videos(self.active_folder);
-        let Some(path) = self.choose_next_video_path(&videos) else {
-            self.show_info("再生できるMP4ファイルがありません");
-            return;
-        };
-
-        self.load_video(ctx, path, add_to_history);
-    }
-
-    fn load_video(&mut self, ctx: &Context, path: PathBuf, add_to_history: bool) {
-        self.clear_queued_video();
-        match self.prepare_video(ctx, path) {
-            Ok(prepared) => self.start_prepared_video(prepared, add_to_history),
-            Err(error) => self.show_info(format!("動画を読み込めません: {error}")),
-        }
-    }
-
-    fn stop_video(&mut self) {
-        if let Some(player) = self.player.as_mut() {
-            player.stop();
-        }
-        self.player = None;
-        self.video_audio_device = None;
-        self.current_video = None;
-    }
-
-    fn clear_queued_video(&mut self) {
-        if let Some(mut queued_video) = self.queued_video.take() {
-            queued_video.player.stop();
-        }
-        self.queued_video_folder = None;
-    }
-
-    fn prepare_video(&self, ctx: &Context, path: PathBuf) -> Result<PreparedVideo, String> {
-        let input_path = path.to_string_lossy().to_string();
-        let mut player = Player::new(ctx, &input_path).map_err(|error| error.to_string())?;
-        player.options.looping = false;
-        player.options.set_audio_volume(self.effective_volume());
-
-        let mut warning = None;
-        let audio_device = match AudioDevice::new() {
-            Ok(mut audio_device) => {
-                if let Err(error) = player.add_audio(&mut audio_device) {
-                    warning = Some(format!("動画音声を初期化できません: {error}"));
-                    None
-                } else {
-                    Some(audio_device)
-                }
-            }
-            Err(error) => {
-                warning = Some(format!("動画音声デバイスを初期化できません: {error}"));
-                None
-            }
-        };
-
-        Ok(PreparedVideo {
-            path,
-            player,
-            audio_device,
-            warning,
-            preload_state: PreloadState::Cold,
-        })
-    }
-
-    fn start_prepared_video(&mut self, prepared: PreparedVideo, add_to_history: bool) {
-        self.stop_video();
-
-        let PreparedVideo {
-            path,
-            mut player,
-            audio_device,
-            warning,
-            preload_state,
-        } = prepared;
-
-        player.options.set_audio_volume(self.effective_volume());
-        match preload_state {
-            PreloadState::Ready => player.resume(),
-            PreloadState::Warming { .. } if player.elapsed_ms() <= VIDEO_PRELOAD_WARMUP_MS * 2 => {
-                player.resume();
-            }
-            PreloadState::Cold | PreloadState::Warming { .. } | PreloadState::SeekingToStart => {
-                player.start();
-            }
-        }
-        self.current_video = Some(path.clone());
-        self.video_audio_device = audio_device;
-        self.player = Some(player);
-
-        if add_to_history {
-            if let Some(index) = self.history_index {
-                self.history.truncate(index + 1);
-            }
-            self.history.push(path);
-            self.history_index = self.history.len().checked_sub(1);
-        }
-
-        if let Some(warning) = warning {
-            self.show_info(warning);
-        }
-    }
-
-    fn target_folder_for_next_video(&self) -> Option<usize> {
-        self.pending_folder.unwrap_or(self.active_folder)
-    }
-
-    fn recent_video_paths(&self) -> Vec<PathBuf> {
-        let end = self
-            .history_index
-            .map(|index| index + 1)
-            .unwrap_or(self.history.len())
-            .min(self.history.len());
-
-        self.history[..end]
-            .iter()
-            .rev()
-            .take(RANDOM_RECENT_EXCLUSION_COUNT)
-            .cloned()
-            .collect()
-    }
-
-    fn choose_next_video_path(&self, videos: &[PathBuf]) -> Option<PathBuf> {
-        choose_random_path_avoiding_recent(
-            videos,
-            &self.recent_video_paths(),
-            RANDOM_RECENT_EXCLUSION_COUNT,
-        )
-    }
-
-    fn ensure_next_video_preloaded(&mut self, ctx: &Context) {
-        if self.queued_video.is_some() {
-            return;
-        }
-
-        let target_folder = self.target_folder_for_next_video();
-        let videos = self.library.active_videos(target_folder);
-        let Some(path) = self.choose_next_video_path(&videos) else {
-            return;
-        };
-
-        if let Ok(prepared) = self.prepare_video(ctx, path) {
-            let mut prepared = prepared;
-            self.start_queued_video_warmup(&mut prepared);
-            self.queued_video = Some(prepared);
-            self.queued_video_folder = target_folder;
-            ctx.request_repaint();
-        }
-    }
-
-    fn start_queued_video_warmup(&self, prepared: &mut PreparedVideo) {
-        prepared.player.options.set_audio_volume(0.0);
-        prepared.player.start();
-        prepared.preload_state = PreloadState::Warming {
-            started_at: Instant::now(),
-        };
-    }
-
-    fn service_queued_video(&mut self) {
-        let Some(prepared) = self.queued_video.as_mut() else {
-            return;
-        };
-
-        prepared.player.options.set_audio_volume(0.0);
-        prepared.player.process_state();
-
-        match prepared.preload_state {
-            PreloadState::Cold => {}
-            PreloadState::Warming { started_at } => {
-                let warmed_by_frame = prepared.player.elapsed_ms() >= VIDEO_PRELOAD_WARMUP_MS;
-                let timed_out =
-                    started_at.elapsed() >= Duration::from_millis(VIDEO_PRELOAD_WARMUP_TIMEOUT_MS);
-
-                if warmed_by_frame || timed_out {
-                    prepared.player.pause();
-                    prepared.player.seek(0.0);
-                    prepared.preload_state = PreloadState::SeekingToStart;
-                }
-            }
-            PreloadState::SeekingToStart => {
-                if matches!(prepared.player.player_state.get(), PlayerState::Paused) {
-                    prepared.preload_state = PreloadState::Ready;
-                }
-            }
-            PreloadState::Ready => {}
-        }
-    }
-
-    fn advance_after_video_finished(&mut self, ctx: &Context) {
-        self.apply_pending_folder_switch();
-
-        let prepared = if self.queued_video_folder == self.active_folder {
-            self.queued_video.take()
-        } else {
-            self.clear_queued_video();
-            None
-        };
-
-        self.queued_video_folder = None;
-        if let Some(prepared) = prepared {
-            self.start_prepared_video(prepared, true);
-        } else {
-            self.play_next_video(ctx, true);
-        }
-        ctx.request_repaint();
-    }
-
-    fn previous_video(&mut self, ctx: &Context) {
-        let Some(index) = self.history_index else {
-            self.show_info("前の動画履歴がありません");
-            return;
-        };
-        if index == 0 {
-            self.show_info("前の動画履歴がありません");
-            return;
-        }
-
-        let previous_index = index - 1;
-        if let Some(path) = self.history.get(previous_index).cloned() {
-            self.history_index = Some(previous_index);
-            self.load_video(ctx, path, false);
-        }
-    }
-
-    fn prepare_multiview_player(&self, ctx: &Context, path: &PathBuf) -> Result<Player, String> {
-        let input_path = path.to_string_lossy().to_string();
-        let mut player = Player::new(ctx, &input_path).map_err(|error| error.to_string())?;
-        player.options.looping = false;
-        player.options.set_audio_volume(0.0);
-        player.start();
-        Ok(player)
-    }
-
-    fn stop_multiview(&mut self) {
-        for tile in &mut self.multiview_tiles {
-            tile.player.stop();
-        }
-        self.multiview_tiles.clear();
-        self.multiview_layout = None;
-    }
-
-    fn shuffle_multiview(&mut self, ctx: &Context) {
-        self.stop_multiview();
-        self.show_indicator("マルチビューを再シャッフル");
-        ctx.request_repaint();
-    }
-
-    fn choose_multiview_video_path(
-        &self,
-        videos: &[PathBuf],
-        occupied_paths: &[PathBuf],
-    ) -> Option<PathBuf> {
-        let mut avoided = occupied_paths.to_vec();
-        avoided.extend(
-            self.multiview_recent
-                .iter()
-                .rev()
-                .take(RANDOM_RECENT_EXCLUSION_COUNT)
-                .cloned(),
-        );
-        choose_random_path_avoiding_recent(videos, &avoided, avoided.len())
-    }
-
-    fn rebuild_multiview(&mut self, ctx: &Context, layout: MultiViewLayout) {
-        self.stop_multiview();
-        self.multiview_layout = Some(layout);
-
-        let videos = self.library.active_videos(self.active_folder);
-        if videos.is_empty() {
-            self.show_info("再生できるMP4ファイルがありません");
-            return;
-        }
-
-        let tile_count = layout.tile_count();
-        let mut selected_paths = Vec::with_capacity(tile_count);
-        for _ in 0..tile_count {
-            let Some(path) = self.choose_multiview_video_path(&videos, &selected_paths) else {
-                break;
-            };
-            selected_paths.push(path);
-        }
-
-        let mut failures = 0usize;
-        for path in selected_paths {
-            match self.prepare_multiview_player(ctx, &path) {
-                Ok(player) => self.multiview_tiles.push(MultiViewTile { path, player }),
-                Err(_) => {
-                    failures += 1;
-                    self.push_multiview_recent(path);
-                }
-            }
-        }
-
-        if failures > 0 {
-            self.show_info(format!("{failures}件の動画を読み込めませんでした"));
-        }
-        ctx.request_repaint();
-    }
-
-    fn replace_multiview_tile(&mut self, ctx: &Context, index: usize) {
-        let Some(old_path) = self
-            .multiview_tiles
-            .get(index)
-            .map(|tile| tile.path.clone())
-        else {
-            return;
-        };
-        self.push_multiview_recent(old_path);
-
-        let videos = self.library.active_videos(self.active_folder);
-        if videos.is_empty() {
-            return;
-        }
-
-        let max_attempts = videos.len().min(8).max(1);
-        let mut attempted_paths = Vec::new();
-        let mut last_error = None;
-
-        for _ in 0..max_attempts {
-            let mut occupied_paths: Vec<PathBuf> = self
-                .multiview_tiles
-                .iter()
-                .enumerate()
-                .filter(|(tile_index, _)| *tile_index != index)
-                .map(|(_, tile)| tile.path.clone())
-                .collect();
-            occupied_paths.extend(attempted_paths.iter().cloned());
-
-            let Some(path) = self.choose_multiview_video_path(&videos, &occupied_paths) else {
-                break;
-            };
-            attempted_paths.push(path.clone());
-
-            match self.prepare_multiview_player(ctx, &path) {
-                Ok(player) => {
-                    if let Some(tile) = self.multiview_tiles.get_mut(index) {
-                        tile.player.stop();
-                        *tile = MultiViewTile { path, player };
-                    }
-                    ctx.request_repaint();
-                    return;
-                }
-                Err(error) => {
-                    last_error = Some(error);
-                    self.push_multiview_recent(path);
-                }
-            }
-        }
-
-        if let Some(tile) = self.multiview_tiles.get_mut(index) {
-            tile.player.seek(0.0);
-            tile.player.start();
-        }
-        if let Some(error) = last_error {
-            self.show_info(format!("次のマルチビュー動画を読み込めません: {error}"));
-        }
-    }
-
-    fn push_multiview_recent(&mut self, path: PathBuf) {
-        self.multiview_recent.push(path);
-        let overflow = self
-            .multiview_recent
-            .len()
-            .saturating_sub(MULTIVIEW_RECENT_LIMIT);
-        if overflow > 0 {
-            self.multiview_recent.drain(0..overflow);
-        }
-    }
-
-    fn restart_random_audio(&mut self) {
+    pub(crate) fn restart_random_audio(&mut self) {
         let Some(player) = self.mp3_player.as_ref() else {
             return;
         };
@@ -587,7 +248,7 @@ impl RndWalkerApp {
         self.play_random_audio();
     }
 
-    fn play_random_audio(&mut self) {
+    pub(crate) fn play_random_audio(&mut self) {
         let Some(player) = self.mp3_player.as_ref() else {
             return;
         };
@@ -609,7 +270,7 @@ impl RndWalkerApp {
         }
     }
 
-    fn switch_folder(&mut self, folder: Option<usize>) {
+    pub(crate) fn switch_folder(&mut self, folder: Option<usize>) {
         if self.library.non_empty_group_count() <= 1 {
             return;
         }
@@ -621,6 +282,7 @@ impl RndWalkerApp {
         }
 
         if self.settings.multiview_enabled {
+            self.bump_loader_generation();
             self.active_folder = folder;
             self.pending_folder = None;
             self.stop_multiview();
@@ -633,14 +295,14 @@ impl RndWalkerApp {
         self.show_indicator(format!("次から: {}", folder_label(folder)));
     }
 
-    fn apply_pending_folder_switch(&mut self) {
+    pub(crate) fn apply_pending_folder_switch(&mut self) {
         if let Some(folder) = self.pending_folder.take() {
             self.active_folder = folder;
             self.show_info(format!("再生対象: {}", folder_label(folder)));
         }
     }
 
-    fn set_volume(&mut self, volume: f32) {
+    pub(crate) fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
         self.settings.volume = self.volume;
         let _ = self.settings.save();
@@ -648,7 +310,7 @@ impl RndWalkerApp {
         self.show_indicator(format!("音量 {}%", (self.volume * 100.0).round() as u32));
     }
 
-    fn toggle_mute(&mut self) {
+    pub(crate) fn toggle_mute(&mut self) {
         self.muted = !self.muted;
         self.apply_volume();
         if self.muted {
@@ -658,7 +320,7 @@ impl RndWalkerApp {
         }
     }
 
-    fn apply_volume(&mut self) {
+    pub(crate) fn apply_volume(&mut self) {
         let volume = self.effective_volume();
         if let Some(player) = self.player.as_mut() {
             player.options.set_audio_volume(volume);
@@ -666,15 +328,17 @@ impl RndWalkerApp {
         if let Some(prepared) = self.queued_video.as_mut() {
             prepared.player.options.set_audio_volume(0.0);
         }
-        for tile in &mut self.multiview_tiles {
-            tile.player.options.set_audio_volume(0.0);
+        for slot in &mut self.multiview_tiles {
+            if let TileSlot::Ready(tile) = slot {
+                tile.player.options.set_audio_volume(0.0);
+            }
         }
         if let Some(player) = self.mp3_player.as_ref() {
             player.set_volume(volume);
         }
     }
 
-    fn effective_volume(&self) -> f32 {
+    pub(crate) fn effective_volume(&self) -> f32 {
         if self.muted {
             0.0
         } else {
@@ -682,21 +346,21 @@ impl RndWalkerApp {
         }
     }
 
-    fn show_indicator(&mut self, text: impl Into<String>) {
+    pub(crate) fn show_indicator(&mut self, text: impl Into<String>) {
         self.indicator = Some(TimedMessage {
             text: text.into(),
             until: Instant::now() + Duration::from_millis(1500),
         });
     }
 
-    fn show_info(&mut self, text: impl Into<String>) {
+    pub(crate) fn show_info(&mut self, text: impl Into<String>) {
         self.info = Some(TimedMessage {
             text: text.into(),
             until: Instant::now() + Duration::from_millis(2600),
         });
     }
 
-    fn clear_expired_messages(&mut self) {
+    pub(crate) fn clear_expired_messages(&mut self) {
         let now = Instant::now();
         if self
             .indicator
@@ -714,7 +378,7 @@ impl RndWalkerApp {
         }
     }
 
-    fn poll_update_status(&mut self) {
+    pub(crate) fn poll_update_status(&mut self) {
         while let Ok(message) = self.update_rx.try_recv() {
             match &message {
                 UpdateMessage::Updated(version) => {
@@ -733,7 +397,33 @@ impl RndWalkerApp {
         }
     }
 
-    fn handle_keyboard(&mut self, ctx: &Context) {
+    /// Drain finished background loads. Stale-generation results are stopped and dropped; the rest
+    /// are dispatched to the single-view / multiview handlers.
+    pub(crate) fn drain_loader_results(&mut self, ctx: &Context) {
+        while let Some(result) = self.loader.try_recv() {
+            if result.request.generation != self.loader_generation {
+                if let Ok(mut player) = result.player {
+                    player.stop();
+                }
+                continue;
+            }
+
+            let LoadResult { request, player } = result;
+            let path = request.path;
+            match request.purpose {
+                LoadPurpose::Single {
+                    add_to_history,
+                    request_id,
+                } => self.on_single_loaded(request_id, path, add_to_history, player),
+                LoadPurpose::Queued { folder } => self.on_queued_loaded(path, folder, player),
+                LoadPurpose::Tile { index } => {
+                    self.on_tile_loaded(ctx, index, path, request.attempts, player)
+                }
+            }
+        }
+    }
+
+    pub(crate) fn handle_keyboard(&mut self, ctx: &Context) {
         if self.show_settings {
             if ctx.input(|input| input.key_pressed(Key::Escape)) {
                 self.show_settings = false;
@@ -788,392 +478,12 @@ impl RndWalkerApp {
             self.switch_folder(None);
         }
     }
-
-    fn draw_player(&mut self, ctx: &Context) {
-        CentralPanel::default()
-            .frame(Frame::none().fill(Color32::BLACK))
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                let mut finished = false;
-                let mut should_preload = false;
-                if let Some(player) = self.player.as_mut() {
-                    let target = fit_rect(rect, player.size);
-                    player.render_frame_at(ui, target);
-                    let state_before_process = player.player_state.get();
-                    player.process_state();
-                    let state_after_process = player.player_state.get();
-
-                    let elapsed_ms = player.elapsed_ms();
-                    let remaining_ms = player.duration_ms.saturating_sub(elapsed_ms);
-                    should_preload =
-                        player.duration_ms > 0 && remaining_ms <= VIDEO_PRELOAD_BEFORE_END_MS;
-                    let playback_started = player.duration_ms > 0 && elapsed_ms > 0;
-                    finished = matches!(state_before_process, PlayerState::EndOfFile)
-                        || matches!(state_after_process, PlayerState::EndOfFile)
-                        || (matches!(state_after_process, PlayerState::Stopped)
-                            && playback_started)
-                        || (self.queued_video.is_some()
-                            && player.duration_ms > 0
-                            && remaining_ms <= VIDEO_FINISH_GRACE_MS);
-                } else {
-                    ui.with_layout(
-                        Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new("動画が読み込まれていません")
-                                    .color(Color32::from_gray(180))
-                                    .size(22.0),
-                            );
-                        },
-                    );
-                }
-
-                if should_preload {
-                    self.ensure_next_video_preloaded(ctx);
-                }
-                self.service_queued_video();
-
-                if finished {
-                    self.advance_after_video_finished(ctx);
-                }
-            });
-    }
-
-    fn draw_multiview(&mut self, ctx: &Context) {
-        CentralPanel::default()
-            .frame(Frame::none().fill(Color32::BLACK))
-            .show(ctx, |ui| {
-                let rect = ui.max_rect();
-                let Some(layout) =
-                    multiview_layout_for_rect(rect, self.settings.multiview_video_size)
-                else {
-                    return;
-                };
-
-                if self.multiview_layout != Some(layout) {
-                    self.rebuild_multiview(ctx, layout);
-                }
-
-                if self.multiview_tiles.is_empty() {
-                    ui.with_layout(
-                        Layout::centered_and_justified(egui::Direction::TopDown),
-                        |ui| {
-                            ui.label(
-                                RichText::new("動画が読み込まれていません")
-                                    .color(Color32::from_gray(180))
-                                    .size(22.0),
-                            );
-                        },
-                    );
-                    return;
-                }
-
-                let cell_width = rect.width() / layout.columns as f32;
-                let cell_height = rect.height() / layout.rows as f32;
-                let mut finished_tiles = Vec::new();
-
-                for (index, tile) in self.multiview_tiles.iter_mut().enumerate() {
-                    let column = index % layout.columns;
-                    let row = index / layout.columns;
-                    let cell_rect = Rect::from_min_size(
-                        rect.min + Vec2::new(column as f32 * cell_width, row as f32 * cell_height),
-                        Vec2::new(cell_width, cell_height),
-                    );
-                    render_video_cover(ui, &tile.player, cell_rect);
-                    let state_before_process = tile.player.player_state.get();
-                    tile.player.process_state();
-                    let state_after_process = tile.player.player_state.get();
-
-                    if video_finished(&tile.player, state_before_process, state_after_process) {
-                        finished_tiles.push(index);
-                    }
-                }
-
-                for index in finished_tiles {
-                    self.replace_multiview_tile(ctx, index);
-                }
-            });
-    }
-
-    fn draw_overlays(&mut self, ctx: &Context) {
-        if let Some(message) = &self.indicator {
-            Area::new(Id::new("indicator"))
-                .anchor(Align2::CENTER_TOP, [0.0, 20.0])
-                .show(ctx, |ui| {
-                    overlay_frame().show(ui, |ui| {
-                        ui.label(
-                            RichText::new(&message.text)
-                                .color(Color32::WHITE)
-                                .size(18.0),
-                        );
-                    });
-                });
-        }
-
-        if let Some(message) = &self.info {
-            Area::new(Id::new("info"))
-                .anchor(Align2::CENTER_BOTTOM, [0.0, -20.0])
-                .show(ctx, |ui| {
-                    overlay_frame().show(ui, |ui| {
-                        ui.label(
-                            RichText::new(&message.text)
-                                .color(Color32::WHITE)
-                                .size(14.0),
-                        );
-                    });
-                });
-        }
-
-        Area::new(Id::new("settings_button"))
-            .anchor(Align2::RIGHT_TOP, [-16.0, 16.0])
-            .show(ctx, |ui| {
-                if settings_button(ui).clicked() {
-                    self.open_settings();
-                }
-            });
-    }
-
-    fn open_settings(&mut self) {
-        self.folder_inputs = self.settings.mp4_folder_paths.clone();
-        self.visible_sub_folders = visible_from_groups(&self.folder_inputs);
-        self.mp3_input = self.settings.mp3_folder_path.clone();
-        self.multiview_enabled_input = self.settings.multiview_enabled;
-        self.multiview_video_size_input = self.settings.multiview_video_size;
-        self.selected_preset.clear();
-        self.preset_name_input.clear();
-        self.show_settings = true;
-    }
-
-    fn draw_settings(&mut self, ctx: &Context) {
-        if !self.show_settings {
-            return;
-        }
-
-        let mut open = self.show_settings;
-        let mut save_clicked = false;
-        Window::new("rndWalker 設定")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(720.0)
-            .show(ctx, |ui| {
-                ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-                    for group in 0..NUM_GROUPS {
-                        ui.heading(format!("MP4フォルダ {}", group + 1));
-                        if group > 0 && ui.button("このグループをクリア").clicked() {
-                            for sub in 0..MAX_SUB_FOLDERS {
-                                self.folder_inputs[group][sub].clear();
-                                self.visible_sub_folders[group][sub] = sub == 0;
-                            }
-                        }
-
-                        for sub in 0..MAX_SUB_FOLDERS {
-                            if sub > 0 && !self.visible_sub_folders[group][sub] {
-                                continue;
-                            }
-                            ui.horizontal(|ui| {
-                                let label = if sub == 0 {
-                                    "基本".to_owned()
-                                } else {
-                                    format!("追加 {}", sub + 1)
-                                };
-                                ui.label(label);
-                                ui.add_sized(
-                                    [420.0, 22.0],
-                                    TextEdit::singleline(&mut self.folder_inputs[group][sub])
-                                        .interactive(false),
-                                );
-                                if ui.button("参照").clicked() {
-                                    if let Some(path) = pick_folder() {
-                                        self.folder_inputs[group][sub] = path;
-                                    }
-                                }
-                                if sub > 0 && ui.button("-").clicked() {
-                                    self.folder_inputs[group][sub].clear();
-                                    self.visible_sub_folders[group][sub] = false;
-                                }
-                            });
-                        }
-
-                        if ui.button("+ 追加フォルダ").clicked() {
-                            if let Some(slot) = (1..MAX_SUB_FOLDERS)
-                                .find(|slot| !self.visible_sub_folders[group][*slot])
-                            {
-                                self.visible_sub_folders[group][slot] = true;
-                            }
-                        }
-                        ui.separator();
-                    }
-
-                    ui.heading("MP3フォルダ");
-                    ui.horizontal(|ui| {
-                        ui.add_sized(
-                            [520.0, 22.0],
-                            TextEdit::singleline(&mut self.mp3_input).interactive(false),
-                        );
-                        if ui.button("参照").clicked() {
-                            if let Some(path) = pick_folder() {
-                                self.mp3_input = path;
-                            }
-                        }
-                    });
-
-                    ui.separator();
-                    ui.heading("マルチビュー");
-                    ui.checkbox(
-                        &mut self.multiview_enabled_input,
-                        "マルチビューを有効にする",
-                    );
-                    ui.add(
-                        egui::Slider::new(
-                            &mut self.multiview_video_size_input,
-                            MIN_MULTIVIEW_VIDEO_SIZE..=MAX_MULTIVIEW_VIDEO_SIZE,
-                        )
-                        .text("動画サイズ")
-                        .suffix(" px"),
-                    );
-
-                    ui.separator();
-                    self.draw_presets(ui);
-                });
-
-                ui.separator();
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("キャンセル").clicked() {
-                        self.show_settings = false;
-                    }
-                    if ui.button("保存").clicked() {
-                        save_clicked = true;
-                    }
-                });
-            });
-
-        if save_clicked {
-            self.save_settings_from_inputs(ctx);
-            open = self.show_settings;
-        }
-        self.show_settings = open && self.show_settings;
-    }
-
-    fn draw_presets(&mut self, ui: &mut egui::Ui) {
-        ui.heading("プリセット");
-        ui.horizontal(|ui| {
-            ComboBox::from_id_salt("preset_select")
-                .selected_text(if self.selected_preset.is_empty() {
-                    "-- プリセットを選択 --"
-                } else {
-                    &self.selected_preset
-                })
-                .show_ui(ui, |ui| {
-                    let names: Vec<String> = self.settings.presets.keys().cloned().collect();
-                    for name in names {
-                        ui.selectable_value(&mut self.selected_preset, name.clone(), &name);
-                    }
-                });
-
-            if ui.button("読込").clicked() {
-                self.load_selected_preset();
-            }
-            if ui.button("削除").clicked() {
-                self.delete_selected_preset();
-            }
-        });
-
-        ui.horizontal(|ui| {
-            ui.add_sized(
-                [320.0, 22.0],
-                TextEdit::singleline(&mut self.preset_name_input).hint_text("プリセット名"),
-            );
-            if ui.button("プリセットとして保存").clicked() {
-                self.save_current_as_preset();
-            }
-        });
-    }
-
-    fn save_current_as_preset(&mut self) {
-        let name = self.preset_name_input.trim().to_owned();
-        if name.is_empty() {
-            self.show_info("プリセット名を入力してください");
-            return;
-        }
-
-        self.settings.presets.insert(
-            name.clone(),
-            FolderPreset {
-                mp4_folder_paths: self.folder_inputs.clone(),
-                mp3_folder_path: self.mp3_input.clone(),
-            },
-        );
-        if let Err(error) = self.settings.save() {
-            self.show_info(format!("プリセット保存失敗: {error}"));
-            return;
-        }
-
-        self.selected_preset = name;
-        self.preset_name_input.clear();
-        self.show_info(format!("プリセット保存: {}", self.selected_preset));
-    }
-
-    fn load_selected_preset(&mut self) {
-        if self.selected_preset.is_empty() {
-            self.show_info("プリセットを選択してください");
-            return;
-        }
-
-        let Some(preset) = self.settings.presets.get(&self.selected_preset).cloned() else {
-            self.show_info("プリセットが見つかりません");
-            return;
-        };
-
-        self.folder_inputs = preset.mp4_folder_paths;
-        self.visible_sub_folders = visible_from_groups(&self.folder_inputs);
-        self.mp3_input = preset.mp3_folder_path;
-        self.show_info(format!("プリセット読込: {}", self.selected_preset));
-    }
-
-    fn delete_selected_preset(&mut self) {
-        if self.selected_preset.is_empty() {
-            self.show_info("プリセットを選択してください");
-            return;
-        }
-
-        let name = self.selected_preset.clone();
-        self.settings.presets.remove(&name);
-        if let Err(error) = self.settings.save() {
-            self.show_info(format!("プリセット削除失敗: {error}"));
-            return;
-        }
-        self.selected_preset.clear();
-        self.show_info(format!("プリセット削除: {name}"));
-    }
-
-    fn save_settings_from_inputs(&mut self, ctx: &Context) {
-        if self.folder_inputs[0][0].trim().is_empty() || self.mp3_input.trim().is_empty() {
-            self.show_info("MP4 Folder 1 と MP3 Folder は必須です");
-            return;
-        }
-
-        self.settings.mp4_folder_paths = self.folder_inputs.clone();
-        self.settings.mp3_folder_path = self.mp3_input.clone();
-        self.settings.volume = self.volume;
-        self.settings.multiview_enabled = self.multiview_enabled_input;
-        self.settings.multiview_video_size = self.multiview_video_size_input;
-        self.settings.normalize();
-
-        if let Err(error) = self.settings.save() {
-            self.show_info(format!("設定保存失敗: {error}"));
-            return;
-        }
-
-        self.show_settings = false;
-        self.reload_library(ctx);
-        self.show_info("設定を保存しました");
-    }
 }
 
 impl eframe::App for RndWalkerApp {
     fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
         ctx.request_repaint_after(Duration::from_millis(16));
+        self.drain_loader_results(ctx);
         self.clear_expired_messages();
         self.poll_update_status();
         self.handle_keyboard(ctx);
@@ -1196,13 +506,29 @@ impl eframe::App for RndWalkerApp {
     }
 }
 
-fn pick_folder() -> Option<String> {
-    rfd::FileDialog::new()
-        .pick_folder()
-        .map(|path| path.to_string_lossy().to_string())
+/// Round a logical size (in physical pixels) UP to a multiple of 64, so the decoder's scaler only
+/// rebuilds when the bucketed value changes instead of on every pixel of an interactive resize.
+/// A zero (or negative) dimension buckets to 64 to keep a valid, non-zero decode box.
+pub(crate) fn bucket_target_size(width: f32, height: f32) -> (u32, u32) {
+    (bucket_dimension(width), bucket_dimension(height))
 }
 
-fn install_japanese_font(ctx: &Context) {
+fn bucket_dimension(value: f32) -> u32 {
+    const BUCKET: u32 = 64;
+    let pixels = value.ceil().max(1.0) as u32;
+    pixels.div_ceil(BUCKET) * BUCKET
+}
+
+pub(crate) fn folder_label(folder: Option<usize>) -> String {
+    match folder {
+        Some(index) => format!("フォルダ{}", index + 1),
+        None => "全フォルダ".to_owned(),
+    }
+}
+
+pub(crate) fn install_japanese_font(ctx: &Context) {
+    use eframe::egui::{FontData, FontDefinitions, FontFamily};
+
     let mut fonts = FontDefinitions::default();
     fonts.font_data.insert(
         JAPANESE_FONT_NAME.to_owned(),
@@ -1222,125 +548,28 @@ fn install_japanese_font(ctx: &Context) {
     ctx.set_fonts(fonts);
 }
 
-fn settings_button(ui: &mut egui::Ui) -> egui::Response {
-    let size = Vec2::new(72.0, 34.0);
-    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
-    let hovered = response.hovered();
-    let fill_alpha = if hovered { 230 } else { 26 };
-    let stroke_alpha = if hovered { 220 } else { 45 };
-    let text_alpha = if hovered { 255 } else { 105 };
+#[cfg(test)]
+mod tests {
+    use super::bucket_target_size;
 
-    ui.painter().rect(
-        rect,
-        egui::Rounding::same(17.0),
-        Color32::from_black_alpha(fill_alpha),
-        Stroke::new(1.0, Color32::from_white_alpha(stroke_alpha)),
-    );
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        "設定",
-        FontId::proportional(15.0),
-        Color32::from_white_alpha(text_alpha),
-    );
-
-    response.on_hover_text("設定を開く")
-}
-
-fn folder_label(folder: Option<usize>) -> String {
-    match folder {
-        Some(index) => format!("フォルダ{}", index + 1),
-        None => "全フォルダ".to_owned(),
-    }
-}
-
-fn visible_from_groups(groups: &[Vec<String>]) -> Vec<Vec<bool>> {
-    let mut visible = vec![vec![false; MAX_SUB_FOLDERS]; NUM_GROUPS];
-    for group in 0..NUM_GROUPS {
-        visible[group][0] = true;
-        for sub in 1..MAX_SUB_FOLDERS {
-            visible[group][sub] = groups
-                .get(group)
-                .and_then(|folders| folders.get(sub))
-                .is_some_and(|path| !path.trim().is_empty());
-        }
-    }
-    visible
-}
-
-fn multiview_layout_for_rect(rect: Rect, video_size: f32) -> Option<MultiViewLayout> {
-    if rect.width() <= 1.0 || rect.height() <= 1.0 {
-        return None;
+    #[test]
+    fn bucket_rounds_up_to_multiple_of_64() {
+        assert_eq!(bucket_target_size(1.0, 64.0), (64, 64));
+        assert_eq!(bucket_target_size(65.0, 128.0), (128, 128));
+        assert_eq!(bucket_target_size(1920.0, 1080.0), (1920, 1088));
     }
 
-    let target_size = video_size.clamp(MIN_MULTIVIEW_VIDEO_SIZE, MAX_MULTIVIEW_VIDEO_SIZE);
-    let mut columns = (rect.width() / target_size).ceil().max(1.0) as usize;
-    let mut rows = (rect.height() / target_size).ceil().max(1.0) as usize;
-
-    while columns * rows > MULTIVIEW_MAX_TILES {
-        if columns >= rows && columns > 1 {
-            columns -= 1;
-        } else if rows > 1 {
-            rows -= 1;
-        } else {
-            break;
-        }
+    #[test]
+    fn bucket_clamps_zero_and_negative_to_one_bucket() {
+        assert_eq!(bucket_target_size(0.0, -10.0), (64, 64));
     }
 
-    Some(MultiViewLayout { columns, rows })
-}
-
-fn video_finished(player: &Player, before: PlayerState, after: PlayerState) -> bool {
-    let playback_started = player.duration_ms > 0 && player.elapsed_ms() > 0;
-    matches!(before, PlayerState::EndOfFile)
-        || matches!(after, PlayerState::EndOfFile)
-        || (matches!(after, PlayerState::Stopped) && playback_started)
-}
-
-fn fit_rect(container: Rect, content_size: Vec2) -> Rect {
-    if content_size.x <= 0.0 || content_size.y <= 0.0 {
-        return container;
+    #[test]
+    fn bucket_is_stable_within_a_bucket() {
+        // Values inside the same 64px band collapse to one output, avoiding scaler churn.
+        assert_eq!(
+            bucket_target_size(129.0, 200.0),
+            bucket_target_size(192.0, 256.0)
+        );
     }
-
-    let scale = (container.width() / content_size.x).min(container.height() / content_size.y);
-    Rect::from_center_size(container.center(), content_size * scale)
-}
-
-fn render_video_cover(ui: &mut egui::Ui, player: &Player, rect: Rect) {
-    ui.painter().image(
-        player.texture_handle.id(),
-        rect,
-        cover_uv_rect(rect, player.size),
-        Color32::WHITE,
-    );
-}
-
-fn cover_uv_rect(container: Rect, content_size: Vec2) -> Rect {
-    if container.width() <= 0.0
-        || container.height() <= 0.0
-        || content_size.x <= 0.0
-        || content_size.y <= 0.0
-    {
-        return Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0));
-    }
-
-    let container_aspect = container.width() / container.height();
-    let content_aspect = content_size.x / content_size.y;
-
-    if content_aspect > container_aspect {
-        let visible_width = (container_aspect / content_aspect).clamp(0.0, 1.0);
-        let inset = (1.0 - visible_width) * 0.5;
-        Rect::from_min_max(egui::pos2(inset, 0.0), egui::pos2(1.0 - inset, 1.0))
-    } else {
-        let visible_height = (content_aspect / container_aspect).clamp(0.0, 1.0);
-        let inset = (1.0 - visible_height) * 0.5;
-        Rect::from_min_max(egui::pos2(0.0, inset), egui::pos2(1.0, 1.0 - inset))
-    }
-}
-
-fn overlay_frame() -> Frame {
-    Frame::none()
-        .fill(Color32::from_black_alpha(180))
-        .rounding(egui::Rounding::same(8.0))
-        .inner_margin(Margin::symmetric(12.0, 8.0))
 }
