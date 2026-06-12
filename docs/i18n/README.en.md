@@ -70,9 +70,11 @@ You can adjust the approximate tile size with the `Video size` slider. While mai
 
 Each multi-view video will play silently, and audio playback for MP3 folders will continue independently as before.
 
+Each tile is reduced and decoded at a resolution that matches the display size of the cell, reducing the CPU/GPU load even when there are many tiles. A black cell will briefly appear while the video is loading, and will change when it's ready. Even if you resize the window, the tiles being played will remain as they are, and will be added or deleted by the amount of increase or decrease.
+
 ## build
 
-Since `egui-video` uses FFmpeg, the development environment requires the FFmpeg 7 development library and `pkg-config`.
+For video decoding, we use a fork version of `vendor/egui-video`. The FFmpeg 7 development library and `pkg-config` are required in the development environment.
 
 ```powershell
 cargo build --release

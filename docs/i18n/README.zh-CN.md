@@ -13,7 +13,7 @@
 - 随机播放MP4视频
 - MP4 文件夹管理最多 3 组
 - 每个 MP4 组中最多可以注册 4 个文件夹
-- 多视图播放，视频充满屏幕
+- 多视图播放，让视频充满屏幕
 - MP3音频独立随机播放
 - 文件夹预设、音量、静音、设置保存
 - 使用 GitHub Releases 在启动时自动检查更新
@@ -70,9 +70,11 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 
 每个多视图视频将无声播放，MP3 文件夹的音频播放将像以前一样独立继续。
 
+每个图块都会以与单元显示尺寸相匹配的分辨率进行缩小和解码，即使有很多图块，也能减少 CPU/GPU 负载。视频加载时会短暂出现黑色单元格，准备就绪后会发生变化。即使您调整窗口大小，正在播放的图块也将保持原样，并且将根据增加或减少的量进行添加或删除。
+
 ## 建造
 
-由于`egui-video`使用FFmpeg，因此开发环境需要FFmpeg 7开发库和`pkg-config`。
+对于视频解码，我们使用“vendor/egui-video”的分支版本。开发环境需要FFmpeg 7开发库和`pkg-config`。
 
 ```powershell
 cargo build --release
