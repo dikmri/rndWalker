@@ -59,6 +59,7 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 | M | ミュート切替 |
 | W / S | 音量アップ / 音量ダウン |
 | D / A | 次のランダム動画 / 前の動画。マルチビュー中の `D` は再シャッフル |
+| マウスホイール | マルチビュー中の動画サイズ変更(上で拡大 / 下で縮小) |
 | 左 / 上 / 右 | フォルダグループ 1 / 2 / 3 へ切替 |
 | 下 | 全フォルダへ戻す |
 

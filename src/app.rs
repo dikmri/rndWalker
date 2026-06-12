@@ -464,6 +464,30 @@ impl RndWalkerApp {
         if ctx.input(|input| input.key_pressed(Key::ArrowDown)) {
             self.switch_folder(None);
         }
+
+        if self.settings.multiview_enabled {
+            let scroll = ctx.input(|input| input.raw_scroll_delta.y);
+            if scroll != 0.0 {
+                self.adjust_multiview_video_size(scroll);
+            }
+        }
+    }
+
+    /// Mouse-wheel handler for multiview: scroll up enlarges tiles, scroll down shrinks them.
+    /// The layout reflows immediately; tiles themselves are not reloaded.
+    fn adjust_multiview_video_size(&mut self, scroll_delta: f32) {
+        use crate::config::{MAX_MULTIVIEW_VIDEO_SIZE, MIN_MULTIVIEW_VIDEO_SIZE};
+
+        let new_size = (self.settings.multiview_video_size + scroll_delta * 0.4)
+            .round()
+            .clamp(MIN_MULTIVIEW_VIDEO_SIZE, MAX_MULTIVIEW_VIDEO_SIZE);
+        if new_size == self.settings.multiview_video_size {
+            return;
+        }
+
+        self.settings.multiview_video_size = new_size;
+        let _ = self.settings.save();
+        self.show_indicator(format!("動画サイズ {}px", new_size as u32));
     }
 }
 

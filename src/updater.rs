@@ -30,20 +30,45 @@ fn check_for_update() -> UpdateMessage {
         return UpdateMessage::Skipped("debug build: update check skipped".to_owned());
     }
 
-    let status = self_update::backends::github::Update::configure()
+    match try_update() {
+        Ok(message) => message,
+        Err(error) => UpdateMessage::Failed(error.to_string()),
+    }
+}
+
+fn configure_updater() -> self_update::backends::github::UpdateBuilder {
+    let mut builder = self_update::backends::github::Update::configure();
+    builder
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(BIN_NAME)
         .show_download_progress(false)
         .show_output(false)
         .no_confirm(true)
-        .current_version(self_update::cargo_crate_version!())
-        .build()
-        .and_then(|updater| updater.update());
+        .current_version(self_update::cargo_crate_version!());
+    builder
+}
 
-    match status {
-        Ok(status) if status.updated() => UpdateMessage::Updated(status.version().to_owned()),
-        Ok(status) => UpdateMessage::UpToDate(status.version().to_owned()),
-        Err(error) => UpdateMessage::Failed(error.to_string()),
+fn try_update() -> Result<UpdateMessage, self_update::errors::Error> {
+    let current_version = self_update::cargo_crate_version!();
+
+    // Resolve the newest release first and update straight to its tag. The default
+    // `update()` prefers semver-"compatible" releases, which for 0.x versions means the
+    // same minor only — an old install would crawl one minor version per restart instead
+    // of jumping directly to the latest release.
+    let latest = configure_updater().build()?.get_latest_release()?;
+    if !self_update::version::bump_is_greater(current_version, &latest.version)? {
+        return Ok(UpdateMessage::UpToDate(current_version.to_owned()));
+    }
+
+    let status = configure_updater()
+        .target_version_tag(&format!("v{}", latest.version))
+        .build()?
+        .update()?;
+
+    if status.updated() {
+        Ok(UpdateMessage::Updated(status.version().to_owned()))
+    } else {
+        Ok(UpdateMessage::UpToDate(status.version().to_owned()))
     }
 }
