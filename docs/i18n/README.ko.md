@@ -81,7 +81,7 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 cargo build --release
 ```
 
-설정은 OS 표준 설정 디렉터리에 'rndWalker/settings.json'으로 저장됩니다.
+설정은 OS 표준의 설정 디렉토리에 `rndWalker/settings.json` 로서 보존됩니다.
 
 ## 릴리스 및 업데이트
 
