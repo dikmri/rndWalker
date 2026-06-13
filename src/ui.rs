@@ -1,5 +1,5 @@
 use crate::app::RndWalkerApp;
-use crate::config::{FolderPreset, MAX_SUB_FOLDERS, NUM_GROUPS};
+use crate::config::{FolderPreset, NUM_GROUPS};
 use eframe::egui::{
     self, Align, Align2, Area, Color32, ComboBox, Context, FontId, Frame, Id, Layout, Margin,
     RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2,
@@ -34,20 +34,6 @@ pub(crate) fn settings_button(ui: &mut egui::Ui) -> egui::Response {
     );
 
     response.on_hover_text("設定を開く")
-}
-
-pub(crate) fn visible_from_groups(groups: &[Vec<String>]) -> Vec<Vec<bool>> {
-    let mut visible = vec![vec![false; MAX_SUB_FOLDERS]; NUM_GROUPS];
-    for (group, row) in visible.iter_mut().enumerate() {
-        row[0] = true;
-        for (sub, cell) in row.iter_mut().enumerate().skip(1) {
-            *cell = groups
-                .get(group)
-                .and_then(|folders| folders.get(sub))
-                .is_some_and(|path| !path.trim().is_empty());
-        }
-    }
-    visible
 }
 
 pub(crate) fn overlay_frame() -> Frame {
@@ -98,7 +84,6 @@ impl RndWalkerApp {
 
     pub(crate) fn open_settings(&mut self) {
         self.folder_inputs = self.settings.mp4_folder_paths.clone();
-        self.visible_sub_folders = visible_from_groups(&self.folder_inputs);
         self.mp3_input = self.settings.mp3_folder_path.clone();
         self.multiview_enabled_input = self.settings.multiview_enabled;
         self.multiview_video_size_input = self.settings.multiview_video_size;
@@ -126,16 +111,12 @@ impl RndWalkerApp {
                     for group in 0..NUM_GROUPS {
                         ui.heading(format!("MP4フォルダ {}", group + 1));
                         if group > 0 && ui.button("このグループをクリア").clicked() {
-                            for sub in 0..MAX_SUB_FOLDERS {
-                                self.folder_inputs[group][sub].clear();
-                                self.visible_sub_folders[group][sub] = sub == 0;
-                            }
+                            self.folder_inputs[group] = vec![String::new()];
                         }
 
-                        for sub in 0..MAX_SUB_FOLDERS {
-                            if sub > 0 && !self.visible_sub_folders[group][sub] {
-                                continue;
-                            }
+                        let mut remove_sub: Option<usize> = None;
+                        let sub_count = self.folder_inputs[group].len();
+                        for sub in 0..sub_count {
                             ui.horizontal(|ui| {
                                 let label = if sub == 0 {
                                     "基本".to_owned()
@@ -154,18 +135,16 @@ impl RndWalkerApp {
                                     }
                                 }
                                 if sub > 0 && ui.button("-").clicked() {
-                                    self.folder_inputs[group][sub].clear();
-                                    self.visible_sub_folders[group][sub] = false;
+                                    remove_sub = Some(sub);
                                 }
                             });
                         }
+                        if let Some(sub) = remove_sub {
+                            self.folder_inputs[group].remove(sub);
+                        }
 
                         if ui.button("+ 追加フォルダ").clicked() {
-                            if let Some(slot) = (1..MAX_SUB_FOLDERS)
-                                .find(|slot| !self.visible_sub_folders[group][*slot])
-                            {
-                                self.visible_sub_folders[group][slot] = true;
-                            }
+                            self.folder_inputs[group].push(String::new());
                         }
                         ui.separator();
                     }
@@ -291,7 +270,6 @@ impl RndWalkerApp {
         };
 
         self.folder_inputs = preset.mp4_folder_paths;
-        self.visible_sub_folders = visible_from_groups(&self.folder_inputs);
         self.mp3_input = preset.mp3_folder_path;
         self.show_info(format!("プリセット読込: {}", self.selected_preset));
     }

@@ -7,7 +7,6 @@ use std::path::PathBuf;
 
 pub const APP_NAME: &str = "rndWalker";
 pub const NUM_GROUPS: usize = 3;
-pub const MAX_SUB_FOLDERS: usize = 4;
 pub const DEFAULT_VOLUME: f32 = 0.10;
 pub const DEFAULT_MULTIVIEW_VIDEO_SIZE: f32 = 320.0;
 pub const MIN_MULTIVIEW_VIDEO_SIZE: f32 = 160.0;
@@ -101,7 +100,7 @@ impl AppSettings {
 }
 
 pub fn empty_folder_groups() -> Vec<Vec<String>> {
-    vec![vec![String::new(); MAX_SUB_FOLDERS]; NUM_GROUPS]
+    vec![vec![String::new()]; NUM_GROUPS]
 }
 
 pub fn normalize_folder_groups(mut groups: Vec<Vec<String>>) -> Vec<Vec<String>> {
@@ -109,14 +108,14 @@ pub fn normalize_folder_groups(mut groups: Vec<Vec<String>>) -> Vec<Vec<String>>
     while groups.len() < NUM_GROUPS {
         groups.push(Vec::new());
     }
-
     for group in &mut groups {
-        group.truncate(MAX_SUB_FOLDERS);
-        while group.len() < MAX_SUB_FOLDERS {
+        while group.len() > 1 && group.last().is_some_and(|s| s.trim().is_empty()) {
+            group.pop();
+        }
+        if group.is_empty() {
             group.push(String::new());
         }
     }
-
     groups
 }
 
@@ -135,9 +134,9 @@ mod tests {
         let groups = normalize_folder_groups(vec![vec!["a".into()], vec!["b".into(), "c".into()]]);
 
         assert_eq!(groups.len(), NUM_GROUPS);
-        assert!(groups.iter().all(|group| group.len() == MAX_SUB_FOLDERS));
-        assert_eq!(groups[0][0], "a");
-        assert_eq!(groups[1][1], "c");
+        assert_eq!(groups[0], vec!["a"]);
+        assert_eq!(groups[1], vec!["b", "c"]);
+        assert_eq!(groups[2], vec![""]);
     }
 
     #[test]

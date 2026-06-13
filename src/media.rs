@@ -1,4 +1,4 @@
-use crate::config::{AppSettings, MAX_SUB_FOLDERS, NUM_GROUPS};
+use crate::config::{AppSettings, NUM_GROUPS};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,8 +23,8 @@ impl MediaLibrary {
 
         for group_index in 0..NUM_GROUPS {
             let mut files = Vec::new();
-            for sub_index in 0..MAX_SUB_FOLDERS {
-                let folder = settings.mp4_folder_paths[group_index][sub_index].trim();
+            for folder in &settings.mp4_folder_paths[group_index] {
+                let folder = folder.trim();
                 if !folder.is_empty() {
                     files.extend(scan_folder(folder, "mp4"));
                 }

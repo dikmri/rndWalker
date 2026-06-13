@@ -1,7 +1,6 @@
 use crate::config::AppSettings;
 use crate::loader::{LoadPurpose, LoadResult, PlayerLoader};
 use crate::media::{choose_random_path, MediaLibrary};
-use crate::ui::visible_from_groups;
 use crate::updater::{self, UpdateMessage};
 use eframe::egui::{Context, Key, ViewportCommand};
 use egui_video::{AudioDevice, Player};
@@ -36,7 +35,6 @@ pub struct RndWalkerApp {
     pub(crate) pending_folder: Option<Option<usize>>,
     pub(crate) show_settings: bool,
     pub(crate) folder_inputs: Vec<Vec<String>>,
-    pub(crate) visible_sub_folders: Vec<Vec<bool>>,
     pub(crate) mp3_input: String,
     pub(crate) multiview_enabled_input: bool,
     pub(crate) multiview_video_size_input: f32,
@@ -119,7 +117,6 @@ impl RndWalkerApp {
 
         let mut app = Self {
             folder_inputs: settings.mp4_folder_paths.clone(),
-            visible_sub_folders: visible_from_groups(&settings.mp4_folder_paths),
             mp3_input: settings.mp3_folder_path.clone(),
             settings,
             library,
