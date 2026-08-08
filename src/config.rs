@@ -1,16 +1,18 @@
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs;
 use std::path::PathBuf;
 
 pub const APP_NAME: &str = "rndWalker";
-pub const NUM_GROUPS: usize = 3;
+pub const DEFAULT_GROUPS: usize = 3;
+pub const NUM_GROUPS: usize = 9;
 pub const DEFAULT_VOLUME: f32 = 0.10;
 pub const DEFAULT_MULTIVIEW_VIDEO_SIZE: f32 = 320.0;
 pub const MIN_MULTIVIEW_VIDEO_SIZE: f32 = 160.0;
 pub const MAX_MULTIVIEW_VIDEO_SIZE: f32 = 720.0;
+pub const PRESET_FUNCTION_KEYS: [u8; 10] = [1, 2, 3, 4, 6, 7, 8, 9, 10, 12];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -20,7 +22,9 @@ pub struct AppSettings {
     pub volume: f32,
     pub multiview_enabled: bool,
     pub multiview_video_size: f32,
+    pub numpad_folder_switching: bool,
     pub presets: BTreeMap<String, FolderPreset>,
+    pub active_preset: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -28,6 +32,7 @@ pub struct AppSettings {
 pub struct FolderPreset {
     pub mp4_folder_paths: Vec<Vec<String>>,
     pub mp3_folder_path: String,
+    pub hotkey: Option<u8>,
 }
 
 impl Default for AppSettings {
@@ -38,7 +43,9 @@ impl Default for AppSettings {
             volume: DEFAULT_VOLUME,
             multiview_enabled: false,
             multiview_video_size: DEFAULT_MULTIVIEW_VIDEO_SIZE,
+            numpad_folder_switching: false,
             presets: BTreeMap::new(),
+            active_preset: None,
         }
     }
 }
@@ -48,6 +55,7 @@ impl Default for FolderPreset {
         Self {
             mp4_folder_paths: empty_folder_groups(),
             mp3_folder_path: String::new(),
+            hotkey: None,
         }
     }
 }
@@ -88,10 +96,40 @@ impl AppSettings {
         self.multiview_video_size = self
             .multiview_video_size
             .clamp(MIN_MULTIVIEW_VIDEO_SIZE, MAX_MULTIVIEW_VIDEO_SIZE);
+        let mut used_hotkeys = HashSet::new();
         for preset in self.presets.values_mut() {
             preset.mp4_folder_paths =
                 normalize_folder_groups(std::mem::take(&mut preset.mp4_folder_paths));
+            if preset.hotkey.is_some_and(|key| {
+                !PRESET_FUNCTION_KEYS.contains(&key) || !used_hotkeys.insert(key)
+            }) {
+                preset.hotkey = None;
+            }
         }
+        if self
+            .active_preset
+            .as_ref()
+            .is_some_and(|name| !self.presets.contains_key(name))
+        {
+            self.active_preset = None;
+        }
+    }
+
+    pub fn restore_active_preset(&mut self) -> bool {
+        if self.active_preset.is_some() {
+            return false;
+        }
+
+        let Some(name) = self.presets.iter().find_map(|(name, preset)| {
+            (preset.mp4_folder_paths == self.mp4_folder_paths
+                && preset.mp3_folder_path == self.mp3_folder_path)
+                .then(|| name.clone())
+        }) else {
+            return false;
+        };
+
+        self.active_preset = Some(name);
+        true
     }
 
     pub fn is_configured(&self) -> bool {
@@ -149,5 +187,55 @@ mod tests {
         settings.normalize();
 
         assert_eq!(settings.multiview_video_size, MAX_MULTIVIEW_VIDEO_SIZE);
+    }
+
+    #[test]
+    fn normalize_keeps_only_unique_supported_preset_hotkeys() {
+        let mut settings = AppSettings::default();
+        settings.presets.insert(
+            "a".into(),
+            FolderPreset {
+                hotkey: Some(1),
+                ..FolderPreset::default()
+            },
+        );
+        settings.presets.insert(
+            "b".into(),
+            FolderPreset {
+                hotkey: Some(1),
+                ..FolderPreset::default()
+            },
+        );
+        settings.presets.insert(
+            "invalid".into(),
+            FolderPreset {
+                hotkey: Some(5),
+                ..FolderPreset::default()
+            },
+        );
+
+        settings.normalize();
+
+        assert_eq!(settings.presets["a"].hotkey, Some(1));
+        assert_eq!(settings.presets["b"].hotkey, None);
+        assert_eq!(settings.presets["invalid"].hotkey, None);
+    }
+
+    #[test]
+    fn restore_active_preset_matches_current_folders() {
+        let mut settings = AppSettings::default();
+        settings.mp4_folder_paths[0][0] = "videos".into();
+        settings.mp3_folder_path = "music".into();
+        settings.presets.insert(
+            "work".into(),
+            FolderPreset {
+                mp4_folder_paths: settings.mp4_folder_paths.clone(),
+                mp3_folder_path: settings.mp3_folder_path.clone(),
+                ..FolderPreset::default()
+            },
+        );
+
+        assert!(settings.restore_active_preset());
+        assert_eq!(settings.active_preset.as_deref(), Some("work"));
     }
 }

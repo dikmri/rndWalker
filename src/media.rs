@@ -1,4 +1,4 @@
-use crate::config::{AppSettings, NUM_GROUPS};
+use crate::config::{AppSettings, DEFAULT_GROUPS, NUM_GROUPS};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -21,7 +21,12 @@ impl MediaLibrary {
     pub fn from_settings(settings: &AppSettings) -> Self {
         let mut library = Self::default();
 
-        for group_index in 0..NUM_GROUPS {
+        let group_count = if settings.numpad_folder_switching {
+            NUM_GROUPS
+        } else {
+            DEFAULT_GROUPS
+        };
+        for group_index in 0..group_count {
             let mut files = Vec::new();
             for folder in &settings.mp4_folder_paths[group_index] {
                 let folder = folder.trim();

@@ -1,5 +1,5 @@
 use crate::app::RndWalkerApp;
-use crate::config::{FolderPreset, NUM_GROUPS};
+use crate::config::{FolderPreset, DEFAULT_GROUPS, NUM_GROUPS, PRESET_FUNCTION_KEYS};
 use eframe::egui::{
     self, Align, Align2, Area, Color32, ComboBox, Context, FontId, Frame, Id, Layout, Margin,
     RichText, ScrollArea, Sense, Stroke, TextEdit, Vec2,
@@ -87,7 +87,8 @@ impl RndWalkerApp {
         self.mp3_input = self.settings.mp3_folder_path.clone();
         self.multiview_enabled_input = self.settings.multiview_enabled;
         self.multiview_video_size_input = self.settings.multiview_video_size;
-        self.selected_preset.clear();
+        self.numpad_folder_switching_input = self.settings.numpad_folder_switching;
+        self.selected_preset = self.active_preset.clone().unwrap_or_default();
         self.preset_name_input.clear();
         self.show_settings = true;
     }
@@ -108,7 +109,12 @@ impl RndWalkerApp {
             .default_width(720.0)
             .show(ctx, |ui| {
                 ScrollArea::vertical().max_height(560.0).show(ui, |ui| {
-                    for group in 0..NUM_GROUPS {
+                    let group_count = if self.numpad_folder_switching_input {
+                        NUM_GROUPS
+                    } else {
+                        DEFAULT_GROUPS
+                    };
+                    for group in 0..group_count {
                         ui.heading(format!("MP4フォルダ {}", group + 1));
                         if group > 0 && ui.button("このグループをクリア").clicked() {
                             self.folder_inputs[group] = vec![String::new()];
@@ -178,6 +184,13 @@ impl RndWalkerApp {
                     );
 
                     ui.separator();
+                    ui.heading("キーボード");
+                    ui.checkbox(
+                        &mut self.numpad_folder_switching_input,
+                        "テンキーでフォルダ切替と9グループを有効にする (1〜9 = 各フォルダ、0 = 全フォルダ)",
+                    );
+
+                    ui.separator();
                     self.draw_presets(ui);
                 });
 
@@ -223,6 +236,31 @@ impl RndWalkerApp {
             }
         });
 
+        ui.label("ショートカット");
+        let names: Vec<String> = self.settings.presets.keys().cloned().collect();
+        for name in names {
+            let current = self
+                .settings
+                .presets
+                .get(&name)
+                .and_then(|preset| preset.hotkey);
+            let mut hotkey = current;
+            ui.horizontal(|ui| {
+                ui.label(&name);
+                ComboBox::from_id_salt(("preset_hotkey", &name))
+                    .selected_text(preset_hotkey_label(hotkey))
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut hotkey, None, "なし");
+                        for key in PRESET_FUNCTION_KEYS {
+                            ui.selectable_value(&mut hotkey, Some(key), format!("F{key}"));
+                        }
+                    });
+            });
+            if hotkey != current {
+                self.assign_preset_hotkey(&name, hotkey);
+            }
+        }
+
         ui.horizontal(|ui| {
             ui.add_sized(
                 [320.0, 22.0],
@@ -241,11 +279,17 @@ impl RndWalkerApp {
             return;
         }
 
+        let hotkey = self
+            .settings
+            .presets
+            .get(&name)
+            .and_then(|preset| preset.hotkey);
         self.settings.presets.insert(
             name.clone(),
             FolderPreset {
                 mp4_folder_paths: self.folder_inputs.clone(),
                 mp3_folder_path: self.mp3_input.clone(),
+                hotkey,
             },
         );
         if let Err(error) = self.settings.save() {
@@ -282,12 +326,32 @@ impl RndWalkerApp {
 
         let name = self.selected_preset.clone();
         self.settings.presets.remove(&name);
+        if self.active_preset.as_deref() == Some(name.as_str()) {
+            self.active_preset = None;
+            self.settings.active_preset = None;
+        }
         if let Err(error) = self.settings.save() {
             self.show_info(format!("プリセット削除失敗: {error}"));
             return;
         }
         self.selected_preset.clear();
         self.show_info(format!("プリセット削除: {name}"));
+    }
+
+    fn assign_preset_hotkey(&mut self, name: &str, hotkey: Option<u8>) {
+        if let Some(hotkey) = hotkey {
+            for (preset_name, preset) in &mut self.settings.presets {
+                if preset_name != name && preset.hotkey == Some(hotkey) {
+                    preset.hotkey = None;
+                }
+            }
+        }
+        if let Some(preset) = self.settings.presets.get_mut(name) {
+            preset.hotkey = hotkey;
+        }
+        if let Err(error) = self.settings.save() {
+            self.show_info(format!("ショートカット保存失敗: {error}"));
+        }
     }
 
     pub(crate) fn save_settings_from_inputs(&mut self, ctx: &Context) {
@@ -301,15 +365,36 @@ impl RndWalkerApp {
         self.settings.volume = self.volume;
         self.settings.multiview_enabled = self.multiview_enabled_input;
         self.settings.multiview_video_size = self.multiview_video_size_input;
+        self.settings.numpad_folder_switching = self.numpad_folder_switching_input;
         self.settings.normalize();
+
+        let updated_preset = (!self.selected_preset.is_empty())
+            .then(|| self.selected_preset.clone())
+            .filter(|name| self.settings.presets.contains_key(name));
+        if let Some(name) = &updated_preset {
+            if let Some(preset) = self.settings.presets.get_mut(name) {
+                preset.mp4_folder_paths = self.settings.mp4_folder_paths.clone();
+                preset.mp3_folder_path = self.settings.mp3_folder_path.clone();
+            }
+        }
+        self.settings.active_preset = updated_preset.clone();
 
         if let Err(error) = self.settings.save() {
             self.show_info(format!("設定保存失敗: {error}"));
             return;
         }
 
+        self.active_preset = updated_preset;
         self.show_settings = false;
         self.reload_library(ctx);
-        self.show_info("設定を保存しました");
+        if self.active_preset.is_some() {
+            self.show_info("設定とプリセットを保存しました");
+        } else {
+            self.show_info("設定を保存しました");
+        }
     }
+}
+
+fn preset_hotkey_label(hotkey: Option<u8>) -> String {
+    hotkey.map_or_else(|| "なし".to_owned(), |key| format!("F{key}"))
 }

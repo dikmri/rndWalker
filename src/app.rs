@@ -38,7 +38,9 @@ pub struct RndWalkerApp {
     pub(crate) mp3_input: String,
     pub(crate) multiview_enabled_input: bool,
     pub(crate) multiview_video_size_input: f32,
+    pub(crate) numpad_folder_switching_input: bool,
     pub(crate) selected_preset: String,
+    pub(crate) active_preset: Option<String>,
     pub(crate) preset_name_input: String,
     pub(crate) volume: f32,
     pub(crate) muted: bool,
@@ -107,11 +109,16 @@ impl RndWalkerApp {
 
         let mut settings = AppSettings::load().unwrap_or_default();
         settings.normalize();
+        if settings.restore_active_preset() {
+            let _ = settings.save();
+        }
+        let active_preset = settings.active_preset.clone();
 
         let library = MediaLibrary::from_settings(&settings);
         let volume = settings.volume;
         let multiview_enabled = settings.multiview_enabled;
         let multiview_video_size = settings.multiview_video_size;
+        let numpad_folder_switching = settings.numpad_folder_switching;
         let update_rx = updater::spawn_update_check();
         let loader = PlayerLoader::new(cc.egui_ctx.clone());
 
@@ -139,9 +146,11 @@ impl RndWalkerApp {
             pending_folder: None,
             show_settings: false,
             selected_preset: String::new(),
+            active_preset,
             preset_name_input: String::new(),
             multiview_enabled_input: multiview_enabled,
             multiview_video_size_input: multiview_video_size,
+            numpad_folder_switching_input: numpad_folder_switching,
             volume,
             muted: false,
             fullscreen: false,
@@ -283,6 +292,26 @@ impl RndWalkerApp {
         self.show_indicator(format!("次から: {}", folder_label(folder)));
     }
 
+    pub(crate) fn activate_preset(&mut self, name: &str, ctx: &Context) {
+        let Some(preset) = self.settings.presets.get(name).cloned() else {
+            return;
+        };
+
+        self.settings.mp4_folder_paths = preset.mp4_folder_paths;
+        self.settings.mp3_folder_path = preset.mp3_folder_path;
+        self.settings.normalize();
+        self.folder_inputs = self.settings.mp4_folder_paths.clone();
+        self.mp3_input = self.settings.mp3_folder_path.clone();
+        self.active_preset = Some(name.to_owned());
+        self.settings.active_preset = self.active_preset.clone();
+
+        if let Err(error) = self.settings.save() {
+            self.show_info(format!("プリセット切替の保存失敗: {error}"));
+        }
+        self.reload_library(ctx);
+        self.show_indicator(format!("プリセット: {name}"));
+    }
+
     pub(crate) fn apply_pending_folder_switch(&mut self) {
         if let Some(folder) = self.pending_folder.take() {
             self.active_folder = folder;
@@ -419,6 +448,11 @@ impl RndWalkerApp {
             return;
         }
 
+        if let Some(name) = self.pressed_preset_name(ctx) {
+            self.activate_preset(&name, ctx);
+            return;
+        }
+
         if ctx.input(|input| input.key_pressed(Key::F5)) {
             self.reload_active_video_folder();
         }
@@ -465,6 +499,38 @@ impl RndWalkerApp {
         if ctx.input(|input| input.key_pressed(Key::ArrowDown)) {
             self.switch_folder(None);
         }
+        if self.settings.numpad_folder_switching {
+            if ctx.input(|input| input.key_pressed(Key::Num1)) {
+                self.switch_folder(Some(0));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num2)) {
+                self.switch_folder(Some(1));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num3)) {
+                self.switch_folder(Some(2));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num4)) {
+                self.switch_folder(Some(3));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num5)) {
+                self.switch_folder(Some(4));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num6)) {
+                self.switch_folder(Some(5));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num7)) {
+                self.switch_folder(Some(6));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num8)) {
+                self.switch_folder(Some(7));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num9)) {
+                self.switch_folder(Some(8));
+            }
+            if ctx.input(|input| input.key_pressed(Key::Num0)) {
+                self.switch_folder(None);
+            }
+        }
 
         if self.settings.multiview_enabled {
             let scroll = ctx.input(|input| input.raw_scroll_delta.y);
@@ -472,6 +538,15 @@ impl RndWalkerApp {
                 self.adjust_multiview_video_size(scroll);
             }
         }
+    }
+
+    fn pressed_preset_name(&self, ctx: &Context) -> Option<String> {
+        self.settings.presets.iter().find_map(|(name, preset)| {
+            let hotkey = preset.hotkey?;
+            let key = function_key(hotkey)?;
+            ctx.input(|input| input.key_pressed(key))
+                .then(|| name.clone())
+        })
     }
 
     /// Mouse-wheel handler for multiview: scroll up enlarges tiles, scroll down shrinks them.
@@ -536,6 +611,24 @@ pub(crate) fn folder_label(folder: Option<usize>) -> String {
         Some(index) => format!("フォルダ{}", index + 1),
         None => "全フォルダ".to_owned(),
     }
+}
+
+fn function_key(number: u8) -> Option<Key> {
+    Some(match number {
+        1 => Key::F1,
+        2 => Key::F2,
+        3 => Key::F3,
+        4 => Key::F4,
+        5 => Key::F5,
+        6 => Key::F6,
+        7 => Key::F7,
+        8 => Key::F8,
+        9 => Key::F9,
+        10 => Key::F10,
+        11 => Key::F11,
+        12 => Key::F12,
+        _ => return None,
+    })
 }
 
 pub(crate) fn install_japanese_font(ctx: &Context) {
