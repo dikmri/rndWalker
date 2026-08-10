@@ -11,11 +11,14 @@ The old Electron version has been saved to `legacy/electron/`, and future develo
 ## Main features
 
 - Random play MP4 videos
-- MP4 folder management for up to 3 groups
+- MP4 folder management of standard 3 groups, up to 9 groups when numeric keypad operation is enabled
 - Up to 4 folders can be registered in each MP4 group
 - Multi-view playback that fills the screen with video
 - Independent random playback of MP3 audio
 - Folder preset, volume, mute, settings save
+- Automatically updates settings changes for loaded presets when saved
+- Preset function key switching
+- Folder switching using optional numeric keypad
 - Automatic update check at startup using GitHub Releases
 - Automatic release for Windows, macOS, and Linux
 
@@ -59,9 +62,11 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 | M | Mute switch |
 | W/S | Volume up / Volume down |
 | D/A | Next random video / previous video. `D` in multiview reshuffles |
-| mouse wheel | Change video size during multi-view (up to enlarge/down to reduce) |
+| mouse wheel | Change video size during multi-view (up to enlarge / down to reduce) |
 | left / top / right | Switch to folder group 1 / 2 / 3 |
 | under | Return to all folders |
+| Set F1~F4/F6~F10/F12 | Instantly switch presets |
+| Numeric keypad 1~9/0 | Only when setting, switch to each folder 1 to 9 / all folders |
 
 ## multi view
 
@@ -81,11 +86,13 @@ For video decoding, we use a fork version of `vendor/egui-video`. The FFmpeg 7 d
 cargo build --release
 ```
 
-The settings are saved as `rndWalker/settings.json` in the OS standard settings directory.
+Settings are saved as `rndWalker/settings.json` in the OS standard settings directory.
+
+Diagnostic logs at startup and when applying window icons are added to `logs/rndwalker.log` in the same location as the executable file.
 
 ## Releases and updates
 
-Pushing a tag like `v0.1.12` will run `.github/workflows/release.yml` and upload the ZIP for the supported platforms to GitHub Releases.
+Pushing a tag like `v0.1.12` will run `.github/workflows/release.yml` and upload the ZIP for the supported platform to GitHub Releases.
 
 For the release version, check GitHub Releases of `dikmri/rndWalker` when starting. If there is an update, it will replace the executable file and prompt you to restart once it is complete.
 

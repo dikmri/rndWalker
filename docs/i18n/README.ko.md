@@ -11,13 +11,16 @@
 ## 주요 기능
 
 - MP4 동영상을 무작위로 재생
-- 최대 3개 그룹의 MP4 폴더 관리
+- 표준 3 그룹, 숫자 키패드 활성화 시 최대 9 그룹의 MP4 폴더 관리
 - 각 MP4 그룹에 최대 4개의 폴더를 등록 가능
 - 동영상을 화면 가득 채우는 멀티뷰 재생
 - MP3 오디오 독립 랜덤 재생
 - 폴더 프리셋, 볼륨, 음소거, 설정 저장
+- 로드 중 프리셋 설정 변경을 저장할 때 자동 업데이트
+- 프리셋 기능 키 전환
+- 옵션 숫자 키패드로 폴더 전환
 - GitHub Releases를 사용하여 시작 시 자동 업데이트 확인
-- Windows, macOS 및 Linux용 자동 릴리스
+- Windows, macOS, Linux용 자동 릴리스
 
 ## 설치
 
@@ -62,6 +65,8 @@ curl -fsSL https://raw.githubusercontent.com/dikmri/rndWalker/main/scripts/insta
 | 마우스 휠 | 멀티 뷰에서 동영상 크기 조정 (위로 확대 / 아래로 축소) |
 | 왼쪽 / 위 / 오른쪽 | 폴더 그룹 1/2/3으로 전환 |
 | 아래 | 모든 폴더로 되돌리기 |
+| 설정한 F1~F4/F6~F10/F12 | 사전 설정을 즉시 전환 |
+| 숫자 키패드 1-9 / 0 | 설정 시에만 각 폴더 1~9 / 모든 폴더로 전환 |
 
 ## 멀티뷰
 
@@ -83,11 +88,13 @@ cargo build --release
 
 설정은 OS 표준의 설정 디렉토리에 `rndWalker/settings.json` 로서 보존됩니다.
 
+기동시와 윈도우 아이콘 적용시의 진단 로그는, 실행 파일과 같은 장소의 `logs/rndwalker.log`에 추기됩니다.
+
 ## 릴리스 및 업데이트
 
 `v0.1.12`와 같은 태그를 푸시하면 `.github/workflows/release.yml`이 실행되고 지원 플랫폼 용 ZIP이 GitHub Releases에 업로드됩니다.
 
-릴리스 버전은 기동시에 `dikmri/rndWalker` 의 GitHub Releases 를 확인합니다. 업데이트가 있으면 실행 파일을 바꾸고 완료 후 다시 시작하라는 메시지를 표시합니다.
+릴리스 버전은 시작시 `dikmri / rndWalker`의 GitHub Releases를 확인합니다. 업데이트가 있으면 실행 파일을 바꾸고 완료 후 다시 시작하라는 메시지를 표시합니다.
 
 ## 다국어 문서
 
