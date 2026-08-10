@@ -106,6 +106,7 @@ pub(crate) enum PreloadState {
 impl RndWalkerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         install_japanese_font(&cc.egui_ctx);
+        crate::win_icon::apply(cc);
 
         let mut settings = AppSettings::load().unwrap_or_default();
         settings.normalize();

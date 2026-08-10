@@ -3687,18 +3687,20 @@ dependencies = [
 
 [[package]]
 name = "rndWalker"
-version = "0.2.6"
+version = "0.2.7"
 dependencies = [
  "anyhow",
  "directories",
  "eframe",
  "egui-video",
  "fastrand",
+ "raw-window-handle",
  "rfd",
  "rodio",
  "self_update",
  "serde",
  "serde_json",
+ "windows-sys 0.59.0",
  "winresource",
 ]
 

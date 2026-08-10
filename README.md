@@ -88,6 +88,8 @@ cargo build --release
 
 設定は OS 標準の設定ディレクトリに `rndWalker/settings.json` として保存されます。
 
+起動時とウィンドウアイコン適用時の診断ログは、実行ファイルと同じ場所の `logs/rndwalker.log` に追記されます。
+
 ## リリースと更新
 
 `v0.1.12` のようなタグを push すると `.github/workflows/release.yml` が実行され、対応プラットフォーム向けの ZIP が GitHub Releases にアップロードされます。

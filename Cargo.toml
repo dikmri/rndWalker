@@ -1,6 +1,6 @@
 [package]
 name = "rndWalker"
-version = "0.2.6"
+version = "0.2.7"
 edition = "2021"
 rust-version = "1.85"
 description = "Random video and audio walker built with Rust and eframe"
@@ -21,6 +21,15 @@ rodio = { version = "0.22.2", optional = true }
 self_update = { version = "0.44.0", features = ["archive-zip", "compression-zip-deflate"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+[target.'cfg(windows)'.dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.59", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_System_SystemInformation",
+    "Win32_UI_WindowsAndMessaging",
+] }
 
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1.31"
